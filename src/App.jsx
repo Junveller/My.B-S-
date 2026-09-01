@@ -1,0 +1,2216 @@
+import React, { useState, useEffect, useRef, useCallback } from "react";
+import {
+  Home, Calendar as CalIcon, CheckSquare, Sparkles, MessageCircle,
+  ChevronLeft, ChevronRight, Plus, X, Check, Send, Circle, Clock,
+  Link as LinkIcon, Settings, Trash2, Save, Download, Upload,
+} from "lucide-react";
+import { loadData, saveData, loadMessages, saveMessages } from "./lib/storage.js";
+import { sendChat } from "./lib/api.js";
+
+/* ------------------------------------------------------------------ */
+/* Design tokens                                                       */
+/* ------------------------------------------------------------------ */
+const C = {
+  bg: "#FBF8F4",
+  card: "#FFFFFF",
+  beige: "#F1E6D3",
+  beigeDeep: "#C89F68",
+  lavender: "#E7DAF3",
+  lavenderMid: "#C9B3E4",
+  lavenderDeep: "#8868B3",
+  ink: "#423C52",
+  inkMuted: "#948C9E",
+  border: "#EAE2F0",
+};
+
+const DEFAULT_CATEGORIES = [
+  { id: "assignment", name: "과제", color: "#B7A4DE" },
+  { id: "job", name: "취업준비", color: "#D9B98C" },
+  { id: "habitcat", name: "습관", color: "#C9A8C4" },
+  { id: "todo", name: "todo 리스트", color: "#A9B7D9" },
+  { id: "schedule", name: "스케쥴", color: "#CBB89A" },
+];
+
+const STATUS_ORDER = ["준비중", "곧 시작", "임박", "종료"];
+const STATUS_STYLE = {
+  "준비중": { bg: "#E7E1ED", text: "#6B6478" },
+  "곧 시작": { bg: "#CBB8E8", text: "#4A3B6B" },
+  "임박": { bg: "#E3A9A9", text: "#FFFFFF" },
+  "종료": { bg: "#A7C9A7", text: "#FFFFFF" },
+};
+
+const ICON_SETS = {
+  얼굴: ["😐", "🙂", "😊", "😄"],
+  강아지: ["🐾", "🐕", "🐩", "🐶"],
+  클로버: ["🍂", "🌱", "🍃", "🍀"],
+};
+
+const uid = () => Math.random().toString(36).slice(2, 10);
+const todayStr = () => new Date().toISOString().slice(0, 10);
+const fmt = (d) => d.toISOString().slice(0, 10);
+const addDays = (dateStr, n) => {
+  const d = new Date(dateStr + "T00:00:00");
+  d.setDate(d.getDate() + n);
+  return fmt(d);
+};
+const dayDiff = (a, b) => {
+  const A = new Date(a + "T00:00:00");
+  const B = new Date(b + "T00:00:00");
+  return Math.round((B - A) / 86400000);
+};
+const tierOf = (p) => (p == null ? -1 : p <= 25 ? 0 : p <= 50 ? 1 : p <= 75 ? 2 : 3);
+
+/* ------------------------------------------------------------------ */
+/* Small shared UI bits                                                */
+/* ------------------------------------------------------------------ */
+function StatusBadge({ status }) {
+  const s = STATUS_STYLE[status] || STATUS_STYLE["준비중"];
+  return (
+    <span
+      className="text-[11px] px-2 py-1 rounded-md font-medium whitespace-nowrap"
+      style={{ background: s.bg, color: s.text }}
+    >
+      {status}
+    </span>
+  );
+}
+
+function IconBtn({ onClick, children, label }) {
+  return (
+    <button
+      onClick={onClick}
+      aria-label={label}
+      className="w-9 h-9 flex items-center justify-center rounded-full active:scale-95 transition"
+      style={{ color: C.lavenderDeep }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Modal({ onClose, title, children }) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
+      style={{ background: "rgba(66,60,82,0.35)" }}
+      onClick={onClose}
+    >
+      <div
+        className="w-full sm:max-w-sm rounded-t-3xl sm:rounded-3xl p-5 max-h-[85vh] overflow-y-auto"
+        style={{ background: C.card }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-base font-semibold" style={{ color: C.ink }}>
+            {title}
+          </h3>
+          <IconBtn onClick={onClose} label="닫기">
+            <X size={18} />
+          </IconBtn>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children }) {
+  return (
+    <div className="mb-3">
+      <div className="text-xs mb-1" style={{ color: C.inkMuted }}>
+        {label}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+const inputStyle = {
+  width: "100%",
+  padding: "10px 12px",
+  borderRadius: 12,
+  border: `1px solid ${C.border}`,
+  background: C.bg,
+  color: C.ink,
+  fontSize: 14,
+  outline: "none",
+};
+
+/* ------------------------------------------------------------------ */
+/* Home                                                                 */
+/* ------------------------------------------------------------------ */
+function timeAgoLabel(date) {
+  if (!date) return null;
+  const h = date.getHours();
+  const m = date.getMinutes();
+  const ampm = h < 12 ? "오전" : "오후";
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${ampm} ${h12}:${String(m).padStart(2, "0")}`;
+}
+
+function Home_({
+  setScreen,
+  scheduleItems,
+  onManualSave,
+  saveStatus,
+  lastSaved,
+  loadedFromStorage,
+  data,
+  setData,
+}) {
+  const urgent = scheduleItems.filter((i) => i.status === "임박" && !i.completed);
+  const [showBackup, setShowBackup] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [importMsg, setImportMsg] = useState("");
+
+  const exportText = JSON.stringify(data, null, 2);
+
+  const doImport = () => {
+    try {
+      const parsed = JSON.parse(importText);
+      if (!parsed.categories || !parsed.scheduleItems || !parsed.habits || !parsed.habitLogs) {
+        setImportMsg("형식이 올바르지 않아요. My.BㅣSㅓ 백업 텍스트인지 확인해주세요.");
+        return;
+      }
+      setData(parsed);
+      setImportMsg("불러왔어요. 상단 '저장' 버튼을 눌러 저장해주세요.");
+    } catch {
+      setImportMsg("텍스트를 읽을 수 없어요. 백업 텍스트를 그대로 붙여넣었는지 확인해주세요.");
+    }
+  };
+
+  return (
+    <div className="flex flex-col h-full px-6 pt-10 pb-6">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-sm" style={{ color: C.inkMuted }}>
+          오늘도 잘하고 있어요
+        </span>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => setShowBackup(true)}
+            className="w-8 h-8 flex items-center justify-center rounded-full shrink-0"
+            style={{ background: C.bg }}
+          >
+            <Download size={14} color={C.inkMuted} />
+          </button>
+          <button
+            onClick={onManualSave}
+            className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-full shrink-0"
+            style={{ background: C.lavender, color: C.ink }}
+          >
+            <Save size={12} />
+            {saveStatus === "saving"
+              ? "저장 중…"
+              : saveStatus === "saved"
+              ? "저장됨 ✓"
+              : "저장"}
+          </button>
+        </div>
+      </div>
+      {lastSaved && (
+        <div className="text-[11px] mb-1" style={{ color: C.inkMuted }}>
+          마지막 저장 {timeAgoLabel(lastSaved)}
+        </div>
+      )}
+      {!lastSaved && (
+        <div className="text-[11px] mb-1" style={{ color: C.inkMuted }}>
+          {loadedFromStorage
+            ? "이전에 저장된 내용을 불러왔어요"
+            : "아직 저장된 내용이 없어요 · 뭔가 추가하면 자동 저장돼요"}
+        </div>
+      )}
+      <h1
+        className="text-3xl font-bold mb-8 tracking-tight"
+        style={{ color: C.ink }}
+      >
+        My.B<span style={{ color: C.lavenderDeep }}>l</span>S
+        <span style={{ color: C.lavenderDeep }}>ㅓ</span>
+      </h1>
+
+      {urgent.length > 0 && (
+        <div
+          className="mb-6 rounded-2xl p-3"
+          style={{ background: "#F6E4E4", border: "1px solid #E3A9A9" }}
+        >
+          {urgent.map((i) => (
+            <div key={i.id} className="text-sm" style={{ color: "#7A2E2E" }}>
+              임박‼️ {i.title}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 gap-3">
+        {[
+          { key: "calendar", label: "캘린더", icon: CalIcon, bg: C.lavender },
+          { key: "assistant", label: "비서", icon: MessageCircle, bg: C.beige },
+          { key: "habits", label: "습관", icon: Sparkles, bg: "#E4D8EE" },
+          { key: "checklist", label: "체크리스트", icon: CheckSquare, bg: "#EFE3D0" },
+        ].map((c) => (
+          <button
+            key={c.key}
+            onClick={() => setScreen(c.key)}
+            className="rounded-3xl p-5 flex flex-col items-start gap-6 active:scale-[0.98] transition h-32"
+            style={{ background: c.bg }}
+          >
+            <c.icon size={22} style={{ color: C.ink }} />
+            <span className="text-sm font-semibold" style={{ color: C.ink }}>
+              {c.label}
+            </span>
+          </button>
+        ))}
+      </div>
+
+      {showBackup && (
+        <Modal onClose={() => setShowBackup(false)} title="백업 (내보내기 / 불러오기)">
+          <div className="text-[11px] mb-3" style={{ color: C.inkMuted }}>
+            자동 저장이 불안하면, 아래 텍스트를 복사해서 메모장 등에 보관해두세요.
+            나중에 이 화면에 다시 붙여넣고 "불러오기"를 누르면 복원돼요.
+          </div>
+          <Field label="현재 데이터 (복사해서 백업하세요)">
+            <textarea
+              readOnly
+              value={exportText}
+              onFocus={(e) => e.target.select()}
+              style={{ ...inputStyle, minHeight: 110, fontSize: 11, resize: "vertical" }}
+            />
+          </Field>
+          <Field label="백업 텍스트 붙여넣어 복원">
+            <textarea
+              value={importText}
+              onChange={(e) => setImportText(e.target.value)}
+              placeholder="여기에 백업 텍스트를 붙여넣으세요"
+              style={{ ...inputStyle, minHeight: 90, fontSize: 11, resize: "vertical" }}
+            />
+          </Field>
+          {importMsg && (
+            <div className="text-[11px] mb-2" style={{ color: C.lavenderDeep }}>
+              {importMsg}
+            </div>
+          )}
+          <button
+            onClick={doImport}
+            className="w-full py-3 rounded-xl text-sm font-semibold flex items-center justify-center gap-1"
+            style={{ background: C.lavenderDeep, color: "#fff" }}
+          >
+            <Upload size={14} /> 불러오기
+          </button>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Calendar                                                             */
+/* ------------------------------------------------------------------ */
+function monthWeeks(y, m) {
+  const first = new Date(y, m, 1);
+  const startOffset = first.getDay();
+  const daysInMonth = new Date(y, m + 1, 0).getDate();
+  const totalCells = Math.ceil((startOffset + daysInMonth) / 7) * 7;
+  const gridStart = new Date(y, m, 1 - startOffset);
+  const dates = Array.from({ length: totalCells }, (_, i) => {
+    const d = new Date(gridStart);
+    d.setDate(gridStart.getDate() + i);
+    return d;
+  });
+  const weeks = [];
+  for (let i = 0; i < dates.length; i += 7) weeks.push(dates.slice(i, i + 7));
+  return weeks;
+}
+
+const MAX_WEEK_LANES = 4;
+
+function layoutWeek(weekDateStrs, items) {
+  const weekStart = weekDateStrs[0];
+  const weekEnd = weekDateStrs[6];
+  const weekItems = items
+    .filter((i) => i.startDate <= weekEnd && i.endDate >= weekStart)
+    .sort((a, b) => {
+      const aDur = dayDiff(a.startDate, a.endDate);
+      const bDur = dayDiff(b.startDate, b.endDate);
+      if (aDur !== bDur) return bDur - aDur;
+      return a.startDate.localeCompare(b.startDate);
+    });
+  const laneEnds = [];
+  const placed = [];
+  for (const it of weekItems) {
+    const startCol =
+      it.startDate < weekStart ? 0 : weekDateStrs.indexOf(it.startDate);
+    const endCol = it.endDate > weekEnd ? 6 : weekDateStrs.indexOf(it.endDate);
+    let lane = laneEnds.findIndex((endUsed) => endUsed < startCol);
+    if (lane === -1) {
+      lane = laneEnds.length;
+      laneEnds.push(endCol);
+    } else {
+      laneEnds[lane] = endCol;
+    }
+    placed.push({ item: it, startCol, endCol, lane });
+  }
+  return placed;
+}
+
+function CalendarScreen({ data, setData }) {
+  const [cursor, setCursor] = useState(() => {
+    const t = new Date();
+    return { y: t.getFullYear(), m: t.getMonth() };
+  });
+  const [picker, setPicker] = useState(false);
+  const [selectedDay, setSelectedDay] = useState(null);
+  const [selectedItem, setSelectedItem] = useState(null);
+  const touchX = useRef(null);
+
+  const monthChange = (delta) => {
+    setCursor((c) => {
+      let m = c.m + delta;
+      let y = c.y;
+      if (m < 0) { m = 11; y -= 1; }
+      if (m > 11) { m = 0; y += 1; }
+      return { y, m };
+    });
+  };
+
+  const weeks = monthWeeks(cursor.y, cursor.m);
+
+  const itemsForDate = (ds) =>
+    data.scheduleItems.filter((i) => ds >= i.startDate && ds <= i.endDate);
+
+  const catColor = (categoryId) =>
+    data.categories.find((c) => c.id === categoryId)?.color || C.lavenderMid;
+
+  const catName = (categoryId) =>
+    data.categories.find((c) => c.id === categoryId)?.name || "";
+
+  const monthFirst = `${cursor.y}-${String(cursor.m + 1).padStart(2, "0")}-01`;
+  const monthLast = fmt(new Date(cursor.y, cursor.m + 1, 0));
+  const monthItems = data.scheduleItems
+    .filter((i) => i.startDate <= monthLast && i.endDate >= monthFirst)
+    .sort((a, b) => a.startDate.localeCompare(b.startDate));
+
+  return (
+    <div className="flex flex-col h-full px-3 pt-8 overflow-y-auto pb-4">
+      <div className="flex items-center justify-between mb-4 px-2">
+        <IconBtn onClick={() => monthChange(-1)} label="이전 달">
+          <ChevronLeft size={20} />
+        </IconBtn>
+        <button
+          onClick={() => setPicker(true)}
+          className="text-base font-semibold px-3 py-1 rounded-full"
+          style={{ color: C.ink }}
+        >
+          {cursor.y}년 {cursor.m + 1}월
+        </button>
+        <IconBtn onClick={() => monthChange(1)} label="다음 달">
+          <ChevronRight size={20} />
+        </IconBtn>
+      </div>
+
+      <div
+        className="grid grid-cols-7 text-center text-xs mb-1 px-1"
+        style={{ color: C.inkMuted }}
+      >
+        {["일", "월", "화", "수", "목", "금", "토"].map((d, i) => (
+          <div key={d} style={i === 0 ? { color: "#C77676" } : {}}>
+            {d}
+          </div>
+        ))}
+      </div>
+
+      <div
+        onTouchStart={(e) => (touchX.current = e.touches[0].clientX)}
+        onTouchEnd={(e) => {
+          if (touchX.current == null) return;
+          const dx = e.changedTouches[0].clientX - touchX.current;
+          if (dx > 60) monthChange(-1);
+          if (dx < -60) monthChange(1);
+          touchX.current = null;
+        }}
+      >
+        {weeks.map((week, wi) => {
+          const weekDateStrs = week.map(fmt);
+          const placed = layoutWeek(weekDateStrs, data.scheduleItems).filter(
+            (p) => p.lane < MAX_WEEK_LANES
+          );
+          return (
+            <div
+              key={wi}
+              style={{
+                borderTop: wi > 0 ? `1px solid ${C.border}` : "none",
+                paddingTop: 6,
+                paddingBottom: 6,
+              }}
+            >
+              <div className="grid grid-cols-7 mb-1">
+                {week.map((d, di) => {
+                  const ds = fmt(d);
+                  const inMonth = d.getMonth() === cursor.m;
+                  const isToday = ds === todayStr();
+                  return (
+                    <button
+                      key={di}
+                      onClick={() => setSelectedDay(ds)}
+                      className="flex justify-center py-0.5"
+                    >
+                      <span
+                        className="w-6 h-6 flex items-center justify-center rounded-full text-xs"
+                        style={
+                          isToday
+                            ? { background: C.lavenderDeep, color: "#fff" }
+                            : {
+                                color: inMonth ? C.ink : C.inkMuted,
+                                opacity: inMonth ? 1 : 0.5,
+                              }
+                        }
+                      >
+                        {d.getDate()}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              {placed.length > 0 && (
+                <div
+                  className="grid gap-[2px]"
+                  style={{
+                    gridTemplateColumns: "repeat(7, 1fr)",
+                    gridAutoRows: "16px",
+                  }}
+                >
+                  {placed.map((p) => {
+                    const isMulti = p.item.startDate !== p.item.endDate;
+                    return (
+                      <button
+                        key={p.item.id}
+                        onClick={() => setSelectedItem(p.item)}
+                        className="text-[10px] truncate text-left px-1 rounded"
+                        style={{
+                          gridColumn: `${p.startCol + 1} / ${p.endCol + 2}`,
+                          gridRow: p.lane + 1,
+                          background: isMulti
+                            ? catColor(p.item.categoryId)
+                            : hexAlpha(catColor(p.item.categoryId), 0.18),
+                          color: isMulti ? "#fff" : C.ink,
+                          borderLeft: isMulti
+                            ? "none"
+                            : `2px solid ${catColor(p.item.categoryId)}`,
+                        }}
+                      >
+                        {p.item.title}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="mt-5 px-2">
+        <div className="text-sm font-semibold mb-2" style={{ color: C.ink }}>
+          {cursor.m + 1}월 일정
+        </div>
+        {monthItems.length === 0 && (
+          <div className="text-sm text-center py-6" style={{ color: C.inkMuted }}>
+            이번 달 등록된 일정이 없어요
+          </div>
+        )}
+        <div className="rounded-2xl overflow-hidden" style={{ background: C.card }}>
+          {monthItems.map((it, idx) => (
+            <div
+              key={it.id}
+              className="flex items-center justify-between px-4 py-3"
+              style={idx > 0 ? { borderTop: `1px solid ${C.border}` } : {}}
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <span
+                  className="w-2 h-2 rounded-full shrink-0"
+                  style={{ background: catColor(it.categoryId) }}
+                />
+                <div className="min-w-0">
+                  <div
+                    className="text-sm truncate"
+                    style={{
+                      color: it.completed ? C.inkMuted : C.ink,
+                      textDecoration: it.completed ? "line-through" : "none",
+                    }}
+                  >
+                    {it.title}
+                  </div>
+                  <div className="text-[11px]" style={{ color: C.inkMuted }}>
+                    {catName(it.categoryId)} · {it.startDate.slice(5)}~
+                    {it.endDate.slice(5)}
+                  </div>
+                </div>
+              </div>
+              <StatusBadge status={it.status} />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {selectedDay && (
+        <Modal
+          onClose={() => setSelectedDay(null)}
+          title={`${Number(selectedDay.slice(5, 7))}월 ${Number(selectedDay.slice(8, 10))}일`}
+        >
+          {itemsForDate(selectedDay).length === 0 && (
+            <div className="text-sm py-6 text-center" style={{ color: C.inkMuted }}>
+              이 날의 일정이 없어요
+            </div>
+          )}
+          {itemsForDate(selectedDay).map((it) => (
+            <div
+              key={it.id}
+              className="flex items-center justify-between py-2 border-b last:border-0"
+              style={{ borderColor: C.border }}
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <span
+                  className="w-2 h-2 rounded-full shrink-0"
+                  style={{ background: catColor(it.categoryId) }}
+                />
+                <span
+                  className="text-sm truncate"
+                  style={{
+                    color: C.ink,
+                    textDecoration: it.completed ? "line-through" : "none",
+                  }}
+                >
+                  {it.title}
+                </span>
+              </div>
+              <StatusBadge status={it.status} />
+            </div>
+          ))}
+        </Modal>
+      )}
+
+      {selectedItem && (
+        <Modal onClose={() => setSelectedItem(null)} title={selectedItem.title}>
+          <div className="flex items-center gap-2 mb-3">
+            <span
+              className="w-2.5 h-2.5 rounded-full"
+              style={{ background: catColor(selectedItem.categoryId) }}
+            />
+            <span className="text-sm" style={{ color: C.inkMuted }}>
+              {catName(selectedItem.categoryId)}
+            </span>
+            <span className="ml-auto">
+              <StatusBadge status={selectedItem.status} />
+            </span>
+          </div>
+          <div className="text-sm mb-1" style={{ color: C.ink }}>
+            {selectedItem.startDate} ~ {selectedItem.endDate}
+          </div>
+          {selectedItem.time && (
+            <div className="text-sm flex items-center gap-1" style={{ color: C.inkMuted }}>
+              <Clock size={12} /> {selectedItem.time}
+            </div>
+          )}
+          {selectedItem.link && (
+            <div className="text-sm flex items-center gap-1 truncate" style={{ color: C.lavenderDeep }}>
+              <LinkIcon size={12} /> {selectedItem.link}
+            </div>
+          )}
+          {selectedItem.memo && (
+            <div className="text-sm mt-2" style={{ color: C.ink }}>
+              {selectedItem.memo}
+            </div>
+          )}
+          <div className="text-[11px] mt-3" style={{ color: C.inkMuted }}>
+            자세한 수정은 체크리스트 화면에서 할 수 있어요.
+          </div>
+        </Modal>
+      )}
+
+      {picker && (
+        <Modal onClose={() => setPicker(false)} title="년/월 이동">
+          <div className="flex items-center justify-center gap-4 mb-4">
+            <IconBtn onClick={() => setCursor((c) => ({ ...c, y: c.y - 1 }))} label="이전 연도">
+              <ChevronLeft size={18} />
+            </IconBtn>
+            <span className="text-lg font-semibold" style={{ color: C.ink }}>
+              {cursor.y}년
+            </span>
+            <IconBtn onClick={() => setCursor((c) => ({ ...c, y: c.y + 1 }))} label="다음 연도">
+              <ChevronRight size={18} />
+            </IconBtn>
+          </div>
+          <div className="grid grid-cols-4 gap-2">
+            {Array.from({ length: 12 }, (_, m) => (
+              <button
+                key={m}
+                onClick={() => {
+                  setCursor((c) => ({ ...c, m }));
+                  setPicker(false);
+                }}
+                className="py-2 rounded-xl text-sm"
+                style={
+                  m === cursor.m
+                    ? { background: C.lavenderDeep, color: "#fff" }
+                    : { background: C.bg, color: C.ink }
+                }
+              >
+                {m + 1}월
+              </button>
+            ))}
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Checklist                                                            */
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* Category picker (free-form add)                                      */
+/* ------------------------------------------------------------------ */
+const CATEGORY_PALETTE = [
+  "#B7A4DE", "#D9B98C", "#C9A8C4", "#A9B7D9",
+  "#CBB89A", "#8868B3", "#E3A9A9", "#A7C9A7",
+];
+
+function CategoryPicker({ categories, selectedId, onSelect, onCreate }) {
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState("");
+  const [color, setColor] = useState(CATEGORY_PALETTE[0]);
+
+  const confirm = () => {
+    if (!name.trim()) return;
+    const cat = { id: uid(), name: name.trim(), color };
+    onCreate(cat);
+    onSelect(cat.id);
+    setName("");
+    setColor(CATEGORY_PALETTE[0]);
+    setAdding(false);
+  };
+
+  return (
+    <div>
+      <div className="flex flex-wrap gap-2">
+        {categories.map((c) => (
+          <button
+            key={c.id}
+            onClick={() => onSelect(c.id)}
+            className="text-xs px-3 py-1.5 rounded-full"
+            style={
+              selectedId === c.id
+                ? { background: c.color, color: "#fff" }
+                : { background: C.bg, color: C.ink, border: `1px solid ${C.border}` }
+            }
+          >
+            {c.name}
+          </button>
+        ))}
+        <button
+          onClick={() => setAdding((v) => !v)}
+          className="text-xs px-3 py-1.5 rounded-full flex items-center gap-1"
+          style={{
+            background: C.bg,
+            color: C.lavenderDeep,
+            border: `1px dashed ${C.lavenderDeep}`,
+          }}
+        >
+          <Plus size={12} /> 추가
+        </button>
+      </div>
+      {adding && (
+        <div
+          className="mt-2 p-3 rounded-xl"
+          style={{ background: C.bg, border: `1px solid ${C.border}` }}
+        >
+          <input
+            style={{ ...inputStyle, marginBottom: 8 }}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="새 카테고리 이름"
+            autoFocus
+          />
+          <div className="flex gap-2 mb-2">
+            {CATEGORY_PALETTE.map((p) => (
+              <button
+                key={p}
+                onClick={() => setColor(p)}
+                className="w-6 h-6 rounded-full shrink-0"
+                style={{
+                  background: p,
+                  outline: color === p ? `2px solid ${C.ink}` : "none",
+                  outlineOffset: 2,
+                }}
+              />
+            ))}
+          </div>
+          <button
+            onClick={confirm}
+            className="w-full py-2 rounded-lg text-xs font-semibold"
+            style={{ background: C.lavenderDeep, color: "#fff" }}
+          >
+            만들기
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChecklistScreen({ data, setData }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [showDone, setShowDone] = useState(false);
+  const [showCatManage, setShowCatManage] = useState(false);
+  const [editCategory, setEditCategory] = useState(null);
+  const [editItem, setEditItem] = useState(null);
+  const [statusPickerItem, setStatusPickerItem] = useState(null);
+  const [saveStatus, setSaveStatus] = useState("");
+  const manualSave = async () => {
+    setSaveStatus("saving");
+    await saveData(data);
+    setSaveStatus("saved");
+    setTimeout(() => setSaveStatus(""), 1500);
+  };
+  const [form, setForm] = useState({
+    title: "",
+    categoryId: data.categories[0].id,
+    startDate: todayStr(),
+    endDate: todayStr(),
+    time: "",
+    link: "",
+    memo: "",
+  });
+
+  const active = data.scheduleItems.filter((i) => !i.completed);
+  const done = data.scheduleItems.filter((i) => i.completed);
+
+  const addItem = () => {
+    if (!form.title.trim()) return;
+    const item = {
+      id: uid(),
+      title: form.title.trim(),
+      categoryId: form.categoryId,
+      startDate: form.startDate,
+      endDate: form.endDate,
+      time: form.time.trim(),
+      link: form.link.trim(),
+      memo: form.memo.trim(),
+      status: "준비중",
+      completed: false,
+    };
+    setData((d) => ({ ...d, scheduleItems: [...d.scheduleItems, item] }));
+    setForm({
+      title: "",
+      categoryId: data.categories[0].id,
+      startDate: todayStr(),
+      endDate: todayStr(),
+      time: "",
+      link: "",
+      memo: "",
+    });
+    setShowAdd(false);
+  };
+
+  const toggleComplete = (id) => {
+    setData((d) => ({
+      ...d,
+      scheduleItems: d.scheduleItems.map((i) =>
+        i.id === id
+          ? { ...i, completed: !i.completed, status: !i.completed ? "종료" : "준비중" }
+          : i
+      ),
+    }));
+  };
+
+  const setStatus = (id, status) => {
+    setData((d) => ({
+      ...d,
+      scheduleItems: d.scheduleItems.map((i) =>
+        i.id === id ? { ...i, status, completed: status === "종료" } : i
+      ),
+    }));
+  };
+
+  const openDetail = (item) => setEditItem({ ...item });
+
+  const saveDetail = () => {
+    if (!editItem.title.trim()) return;
+    setData((d) => ({
+      ...d,
+      scheduleItems: d.scheduleItems.map((i) =>
+        i.id === editItem.id ? { ...editItem, title: editItem.title.trim() } : i
+      ),
+    }));
+    setEditItem(null);
+  };
+
+  const deleteDetail = () => {
+    setData((d) => ({
+      ...d,
+      scheduleItems: d.scheduleItems.filter((i) => i.id !== editItem.id),
+    }));
+    setEditItem(null);
+  };
+
+  const renderRow = (it, cat) => (
+    <div className="relative flex items-center justify-between px-4 py-3 gap-2">
+      <div className="flex items-center gap-2 min-w-0 flex-1">
+        <button
+          onClick={() => toggleComplete(it.id)}
+          className="w-5 h-5 rounded-full border flex items-center justify-center shrink-0"
+          style={{ borderColor: cat.color }}
+        >
+          {it.completed && <Check size={12} color={cat.color} />}
+        </button>
+        <button
+          onClick={() => openDetail(it)}
+          className="flex flex-col items-start text-left min-w-0"
+        >
+          <span
+            className="text-sm truncate"
+            style={{
+              color: it.completed ? C.inkMuted : C.ink,
+              textDecoration: it.completed ? "line-through" : "none",
+            }}
+          >
+            {it.title}
+          </span>
+          {(it.time || it.link) && (
+            <span
+              className="flex items-center gap-2 text-[11px] mt-0.5"
+              style={{ color: C.inkMuted }}
+            >
+              {it.time && (
+                <span className="flex items-center gap-0.5">
+                  <Clock size={10} /> {it.time}
+                </span>
+              )}
+              {it.link && (
+                <span className="flex items-center gap-0.5">
+                  <LinkIcon size={10} /> 링크
+                </span>
+              )}
+            </span>
+          )}
+        </button>
+      </div>
+
+      <button
+        onClick={() => setStatusPickerItem(it)}
+        className="shrink-0"
+      >
+        <StatusBadge status={it.status} />
+      </button>
+    </div>
+  );
+
+  return (
+    <div className="flex flex-col h-full px-5 pt-8 pb-4 overflow-y-auto">
+      <div className="flex items-center justify-between mb-5">
+        <h2 className="text-xl font-bold" style={{ color: C.ink }}>
+          체크리스트
+        </h2>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={manualSave}
+            className="flex items-center gap-1 text-xs px-3 py-2 rounded-full"
+            style={{ background: C.beige, color: C.ink }}
+          >
+            <Save size={13} />
+            {saveStatus === "saving" ? "저장 중…" : saveStatus === "saved" ? "저장됨 ✓" : "저장"}
+          </button>
+          <button
+            onClick={() => setShowCatManage(true)}
+            className="w-9 h-9 flex items-center justify-center rounded-full"
+            style={{ background: C.bg }}
+          >
+            <Settings size={16} color={C.inkMuted} />
+          </button>
+          <button
+            onClick={() => setShowAdd(true)}
+            className="flex items-center gap-1 text-sm px-3 py-2 rounded-full"
+            style={{ background: C.lavender, color: C.ink }}
+          >
+            <Plus size={16} /> 추가
+          </button>
+        </div>
+      </div>
+
+      {data.categories.map((cat) => {
+        const items = active.filter((i) => i.categoryId === cat.id);
+        if (items.length === 0) return null;
+        return (
+          <div key={cat.id} className="mb-5">
+            <button
+              onClick={() => setEditCategory(cat)}
+              className="flex items-center gap-2 mb-2"
+            >
+              <span
+                className="w-2.5 h-2.5 rounded-full"
+                style={{ background: cat.color }}
+              />
+              <span className="text-sm font-semibold" style={{ color: C.ink }}>
+                {cat.name}
+              </span>
+              <Settings size={11} color={C.inkMuted} />
+            </button>
+            <div className="rounded-2xl overflow-hidden" style={{ background: C.card }}>
+              {items.map((it, idx) => (
+                <div
+                  key={it.id}
+                  style={idx > 0 ? { borderTop: `1px solid ${C.border}` } : {}}
+                >
+                  {renderRow(it, cat)}
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+
+      {active.length === 0 && (
+        <div className="text-sm text-center py-10" style={{ color: C.inkMuted }}>
+          아직 등록된 항목이 없어요. + 추가 로 시작해보세요.
+        </div>
+      )}
+
+      <button
+        onClick={() => setShowDone((v) => !v)}
+        className="text-sm py-2 mt-2"
+        style={{ color: C.lavenderDeep }}
+      >
+        {showDone ? "완료된 항목 숨기기" : `완료된 항목 보기 (${done.length})`}
+      </button>
+
+      {showDone && (
+        <div className="rounded-2xl overflow-hidden mb-4" style={{ background: C.card }}>
+          {done.map((it, idx) => (
+            <div
+              key={it.id}
+              className="flex items-center justify-between px-4 py-3"
+              style={idx > 0 ? { borderTop: `1px solid ${C.border}` } : {}}
+            >
+              <button
+                className="flex items-center gap-2 min-w-0"
+                onClick={() => toggleComplete(it.id)}
+              >
+                <span
+                  className="w-5 h-5 rounded-full flex items-center justify-center shrink-0"
+                  style={{ background: C.inkMuted }}
+                >
+                  <Check size={12} color="#fff" />
+                </span>
+                <span
+                  className="text-sm truncate"
+                  style={{ color: C.inkMuted, textDecoration: "line-through" }}
+                >
+                  {it.title}
+                </span>
+              </button>
+            </div>
+          ))}
+          {done.length === 0 && (
+            <div className="text-sm text-center py-6" style={{ color: C.inkMuted }}>
+              완료된 항목이 없어요
+            </div>
+          )}
+        </div>
+      )}
+
+      {showAdd && (
+        <Modal onClose={() => setShowAdd(false)} title="새 항목">
+          <Field label="제목">
+            <input
+              style={inputStyle}
+              value={form.title}
+              onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+              placeholder="예: A기업 서류 제출"
+            />
+          </Field>
+          <Field label="카테고리">
+            <CategoryPicker
+              categories={data.categories}
+              selectedId={form.categoryId}
+              onSelect={(id) => setForm((f) => ({ ...f, categoryId: id }))}
+              onCreate={(cat) =>
+                setData((d) => ({ ...d, categories: [...d.categories, cat] }))
+              }
+            />
+          </Field>
+          <div className="flex gap-2">
+            <Field label="시작일">
+              <input
+                type="date"
+                style={inputStyle}
+                value={form.startDate}
+                onChange={(e) => setForm((f) => ({ ...f, startDate: e.target.value }))}
+              />
+            </Field>
+            <Field label="마감일">
+              <input
+                type="date"
+                style={inputStyle}
+                value={form.endDate}
+                onChange={(e) => setForm((f) => ({ ...f, endDate: e.target.value }))}
+              />
+            </Field>
+          </div>
+          <Field label="시간 (선택)">
+            <input
+              type="time"
+              style={inputStyle}
+              value={form.time}
+              onChange={(e) => setForm((f) => ({ ...f, time: e.target.value }))}
+            />
+          </Field>
+          <Field label="링크 (선택)">
+            <input
+              style={inputStyle}
+              value={form.link}
+              onChange={(e) => setForm((f) => ({ ...f, link: e.target.value }))}
+              placeholder="https://..."
+            />
+          </Field>
+          <Field label="메모 (선택)">
+            <textarea
+              style={{ ...inputStyle, minHeight: 64, resize: "vertical" }}
+              value={form.memo}
+              onChange={(e) => setForm((f) => ({ ...f, memo: e.target.value }))}
+              placeholder="자유롭게 메모하세요"
+            />
+          </Field>
+          <button
+            onClick={addItem}
+            className="w-full py-3 rounded-xl text-sm font-semibold mt-2"
+            style={{ background: C.lavenderDeep, color: "#fff" }}
+          >
+            추가하기
+          </button>
+        </Modal>
+      )}
+
+      {statusPickerItem && (
+        <Modal onClose={() => setStatusPickerItem(null)} title="상태 선택">
+          <div className="flex flex-col gap-2">
+            {STATUS_ORDER.map((s) => (
+              <button
+                key={s}
+                onClick={() => {
+                  setStatus(statusPickerItem.id, s);
+                  setStatusPickerItem(null);
+                }}
+                className="flex items-center justify-between px-4 py-3 rounded-xl"
+                style={{
+                  background: s === statusPickerItem.status ? C.bg : "transparent",
+                  border: `1px solid ${C.border}`,
+                }}
+              >
+                <span className="text-sm" style={{ color: C.ink }}>
+                  {s}
+                </span>
+                <StatusBadge status={s} />
+              </button>
+            ))}
+          </div>
+        </Modal>
+      )}
+
+      {editCategory && (
+        <Modal onClose={() => setEditCategory(null)} title="카테고리 편집">
+          <Field label="이름">
+            <input
+              style={inputStyle}
+              value={
+                data.categories.find((c) => c.id === editCategory.id)?.name ?? ""
+              }
+              onChange={(e) =>
+                setData((d) => ({
+                  ...d,
+                  categories: d.categories.map((cc) =>
+                    cc.id === editCategory.id ? { ...cc, name: e.target.value } : cc
+                  ),
+                }))
+              }
+            />
+          </Field>
+          <Field label="색상">
+            <div className="flex flex-wrap gap-2">
+              {CATEGORY_PALETTE.map((p) => (
+                <button
+                  key={p}
+                  onClick={() =>
+                    setData((d) => ({
+                      ...d,
+                      categories: d.categories.map((cc) =>
+                        cc.id === editCategory.id ? { ...cc, color: p } : cc
+                      ),
+                    }))
+                  }
+                  className="w-7 h-7 rounded-full shrink-0"
+                  style={{
+                    background: p,
+                    outline:
+                      data.categories.find((c) => c.id === editCategory.id)?.color === p
+                        ? `2px solid ${C.ink}`
+                        : "none",
+                    outlineOffset: 2,
+                  }}
+                />
+              ))}
+            </div>
+          </Field>
+          {(() => {
+            const count = data.scheduleItems.filter(
+              (i) => i.categoryId === editCategory.id
+            ).length;
+            return (
+              <button
+                onClick={() => {
+                  if (count > 0) return;
+                  setData((d) => ({
+                    ...d,
+                    categories: d.categories.filter((cc) => cc.id !== editCategory.id),
+                  }));
+                  setEditCategory(null);
+                }}
+                disabled={count > 0}
+                className="w-full py-3 rounded-xl text-sm font-semibold mt-2 flex items-center justify-center gap-1"
+                style={{
+                  background: C.bg,
+                  color: count > 0 ? C.inkMuted : "#B25858",
+                  border: `1px solid ${C.border}`,
+                  opacity: count > 0 ? 0.6 : 1,
+                }}
+              >
+                <Trash2 size={14} />
+                {count > 0 ? `이 카테고리를 쓰는 항목 ${count}개가 있어 삭제 불가` : "카테고리 삭제"}
+              </button>
+            );
+          })()}
+          <button
+            onClick={() => setEditCategory(null)}
+            className="w-full py-3 rounded-xl text-sm font-semibold mt-2"
+            style={{ background: C.lavenderDeep, color: "#fff" }}
+          >
+            완료
+          </button>
+        </Modal>
+      )}
+
+      {editItem && (
+        <Modal onClose={() => setEditItem(null)} title="일정 상세">
+          <Field label="제목">
+            <input
+              style={inputStyle}
+              value={editItem.title}
+              onChange={(e) =>
+                setEditItem((f) => ({ ...f, title: e.target.value }))
+              }
+            />
+          </Field>
+          <Field label="카테고리">
+            <CategoryPicker
+              categories={data.categories}
+              selectedId={editItem.categoryId}
+              onSelect={(id) => setEditItem((f) => ({ ...f, categoryId: id }))}
+              onCreate={(cat) =>
+                setData((d) => ({ ...d, categories: [...d.categories, cat] }))
+              }
+            />
+          </Field>
+          <Field label="상태">
+            <div className="flex flex-wrap gap-2">
+              {STATUS_ORDER.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setEditItem((f) => ({ ...f, status: s }))}
+                  style={
+                    editItem.status === s
+                      ? { outline: `2px solid ${C.lavenderDeep}`, outlineOffset: 2, borderRadius: 8 }
+                      : {}
+                  }
+                >
+                  <StatusBadge status={s} />
+                </button>
+              ))}
+            </div>
+          </Field>
+          <div className="flex gap-2">
+            <Field label="시작일">
+              <input
+                type="date"
+                style={inputStyle}
+                value={editItem.startDate}
+                onChange={(e) =>
+                  setEditItem((f) => ({ ...f, startDate: e.target.value }))
+                }
+              />
+            </Field>
+            <Field label="마감일">
+              <input
+                type="date"
+                style={inputStyle}
+                value={editItem.endDate}
+                onChange={(e) =>
+                  setEditItem((f) => ({ ...f, endDate: e.target.value }))
+                }
+              />
+            </Field>
+          </div>
+          <Field label="시간 (선택)">
+            <input
+              type="time"
+              style={inputStyle}
+              value={editItem.time || ""}
+              onChange={(e) =>
+                setEditItem((f) => ({ ...f, time: e.target.value }))
+              }
+            />
+          </Field>
+          <Field label="링크 (선택)">
+            <input
+              style={inputStyle}
+              value={editItem.link || ""}
+              onChange={(e) =>
+                setEditItem((f) => ({ ...f, link: e.target.value }))
+              }
+              placeholder="https://..."
+            />
+          </Field>
+          <Field label="메모 (선택)">
+            <textarea
+              style={{ ...inputStyle, minHeight: 64, resize: "vertical" }}
+              value={editItem.memo || ""}
+              onChange={(e) =>
+                setEditItem((f) => ({ ...f, memo: e.target.value }))
+              }
+              placeholder="자유롭게 메모하세요"
+            />
+          </Field>
+          <div className="flex gap-2 mt-2">
+            <button
+              onClick={deleteDetail}
+              className="flex-1 py-3 rounded-xl text-sm font-semibold"
+              style={{ background: C.bg, color: "#B25858", border: `1px solid ${C.border}` }}
+            >
+              삭제
+            </button>
+            <button
+              onClick={saveDetail}
+              className="flex-1 py-3 rounded-xl text-sm font-semibold"
+              style={{ background: C.lavenderDeep, color: "#fff" }}
+            >
+              저장
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {showCatManage && (
+        <Modal onClose={() => setShowCatManage(false)} title="카테고리 관리">
+          {data.categories.map((c) => {
+            const count = data.scheduleItems.filter(
+              (i) => i.categoryId === c.id
+            ).length;
+            return (
+              <div key={c.id} className="flex items-center gap-2 mb-3">
+                <div className="flex gap-1">
+                  {CATEGORY_PALETTE.slice(0, 4).map((p) => (
+                    <button
+                      key={p}
+                      onClick={() =>
+                        setData((d) => ({
+                          ...d,
+                          categories: d.categories.map((cc) =>
+                            cc.id === c.id ? { ...cc, color: p } : cc
+                          ),
+                        }))
+                      }
+                      className="w-5 h-5 rounded-full shrink-0"
+                      style={{
+                        background: p,
+                        outline: c.color === p ? `2px solid ${C.ink}` : "none",
+                        outlineOffset: 2,
+                      }}
+                    />
+                  ))}
+                </div>
+                <input
+                  style={{ ...inputStyle, flex: 1, padding: "6px 10px" }}
+                  value={c.name}
+                  onChange={(e) =>
+                    setData((d) => ({
+                      ...d,
+                      categories: d.categories.map((cc) =>
+                        cc.id === c.id ? { ...cc, name: e.target.value } : cc
+                      ),
+                    }))
+                  }
+                />
+                <button
+                  onClick={() => {
+                    if (count > 0) return;
+                    setData((d) => ({
+                      ...d,
+                      categories: d.categories.filter((cc) => cc.id !== c.id),
+                    }));
+                  }}
+                  disabled={count > 0}
+                  className="w-8 h-8 flex items-center justify-center rounded-full shrink-0"
+                  style={{ opacity: count > 0 ? 0.3 : 1 }}
+                >
+                  <Trash2 size={14} color="#B25858" />
+                </button>
+              </div>
+            );
+          })}
+          <div className="text-[11px] mb-3" style={{ color: C.inkMuted }}>
+            항목이 있는 카테고리는 항목을 먼저 옮기거나 지운 뒤 삭제할 수 있어요.
+          </div>
+          <CategoryPicker
+            categories={[]}
+            selectedId={null}
+            onSelect={() => {}}
+            onCreate={(cat) =>
+              setData((d) => ({ ...d, categories: [...d.categories, cat] }))
+            }
+          />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Habits                                                               */
+/* ------------------------------------------------------------------ */
+function HabitLogModal({ habit, initialDate, logs, onSave, onClose }) {
+  const [date, setDate] = useState(initialDate);
+  const currentLog = logs.find((l) => l.date === date);
+  const [percent, setPercent] = useState(currentLog?.percent ?? 50);
+  const [note, setNote] = useState(currentLog?.note ?? "");
+
+  useEffect(() => {
+    const l = logs.find((x) => x.date === date);
+    setPercent(l?.percent ?? 50);
+    setNote(l?.note ?? "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date]);
+
+  return (
+    <Modal onClose={onClose} title={habit.name}>
+      <Field label="날짜">
+        <input
+          type="date"
+          style={inputStyle}
+          value={date}
+          max={todayStr()}
+          onChange={(e) => setDate(e.target.value)}
+        />
+      </Field>
+      <div className="text-center mb-4">
+        <div className="text-4xl mb-2">
+          {ICON_SETS[habit.iconSet][tierOf(percent)]}
+        </div>
+        <div className="text-2xl font-bold" style={{ color: habit.color }}>
+          {percent}%
+        </div>
+      </div>
+      <input
+        type="range"
+        min={0}
+        max={100}
+        value={percent}
+        onChange={(e) => setPercent(Number(e.target.value))}
+        className="w-full mb-4"
+      />
+      <Field label="한줄 메모">
+        <input
+          style={inputStyle}
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="오늘 어땠나요?"
+        />
+      </Field>
+      <button
+        onClick={() => onSave(date, percent, note)}
+        className="w-full py-3 rounded-xl text-sm font-semibold"
+        style={{ background: habit.color, color: "#fff" }}
+      >
+        저장
+      </button>
+    </Modal>
+  );
+}
+
+function blockDays(habit, range) {
+  const anchor = habit.anchorDate || habit.startDate || todayStr();
+  return Array.from({ length: range }, (_, i) => addDays(anchor, i));
+}
+
+function HabitCard({ habit, logs, onLog, onSetAnchor, onDelete }) {
+  const [range, setRange] = useState(30);
+  const days = blockDays(habit, range);
+  const cols = range === 7 ? 7 : range === 15 ? 5 : range === 30 ? 5 : 10;
+  const anchor = habit.anchorDate || habit.startDate || todayStr();
+
+  return (
+    <div className="rounded-2xl p-4 mb-4" style={{ background: C.card }}>
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: habit.color }} />
+          <span className="text-sm font-semibold truncate" style={{ color: C.ink }}>
+            {habit.name}
+          </span>
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          {[7, 15, 30, 180].map((r) => (
+            <button
+              key={r}
+              onClick={() => setRange(r)}
+              className="text-[11px] px-2 py-1 rounded-full"
+              style={
+                range === r
+                  ? { background: habit.color, color: "#fff" }
+                  : { background: C.bg, color: C.inkMuted }
+              }
+            >
+              {r === 180 ? "6개월" : `${r}일`}
+            </button>
+          ))}
+          <button
+            onClick={() => onDelete(habit)}
+            className="w-6 h-6 flex items-center justify-center rounded-full shrink-0"
+          >
+            <Trash2 size={13} color={C.inkMuted} />
+          </button>
+        </div>
+      </div>
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-[11px]" style={{ color: C.inkMuted }}>
+          기준일
+        </span>
+        <input
+          type="date"
+          value={anchor}
+          onChange={(e) => onSetAnchor(habit.id, e.target.value)}
+          className="text-[11px] px-2 py-1 rounded-lg"
+          style={{ background: C.bg, color: C.ink, border: `1px solid ${C.border}` }}
+        />
+      </div>
+      <div
+        className="grid gap-1"
+        style={{ gridTemplateColumns: `repeat(${cols}, minmax(0,1fr))` }}
+      >
+        {days.map((d) => {
+          const log = logs.find((l) => l.date === d);
+          const tier = tierOf(log?.percent);
+          const sat = tier === -1 ? 0.12 : 0.35 + tier * 0.22;
+          const isFuture = d > todayStr();
+          return (
+            <button
+              key={d}
+              disabled={isFuture}
+              onClick={() => onLog(habit, d)}
+              className="aspect-square rounded-md flex items-center justify-center text-[10px]"
+              style={{
+                background: tier === -1 ? C.bg : hexAlpha(habit.color, sat),
+                opacity: isFuture ? 0.4 : 1,
+              }}
+              title={d}
+            >
+              {!isFuture && tier !== -1 && range <= 30 && (
+                <span style={{ fontSize: range === 7 ? 16 : 11 }}>
+                  {ICON_SETS[habit.iconSet][tier]}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function hexAlpha(hex, alpha) {
+  const h = hex.replace("#", "");
+  const r = parseInt(h.substring(0, 2), 16);
+  const g = parseInt(h.substring(2, 4), 16);
+  const b = parseInt(h.substring(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function HabitsScreen({ data, setData }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [logTarget, setLogTarget] = useState(null); // {habit, date, log}
+  const [saveStatus, setSaveStatus] = useState("");
+  const manualSave = async () => {
+    setSaveStatus("saving");
+    await saveData(data);
+    setSaveStatus("saved");
+    setTimeout(() => setSaveStatus(""), 1500);
+  };
+  const [form, setForm] = useState({
+    name: "",
+    color: "#B7A4DE",
+    iconSet: "얼굴",
+    goal: "",
+  });
+
+  const palette = ["#B7A4DE", "#D9B98C", "#C9A8C4", "#A9B7D9", "#CBB89A", "#8868B3"];
+
+  const addHabit = () => {
+    if (!form.name.trim()) return;
+    const habit = {
+      id: uid(),
+      name: form.name.trim(),
+      color: form.color,
+      iconSet: form.iconSet,
+      goal: form.goal.trim(),
+      startDate: todayStr(),
+      anchorDate: todayStr(),
+    };
+    setData((d) => ({ ...d, habits: [...d.habits, habit] }));
+    setForm({ name: "", color: "#B7A4DE", iconSet: "얼굴", goal: "" });
+    setShowAdd(false);
+  };
+
+  const saveLog = (habitId, date, percent, note) => {
+    setData((d) => {
+      const existing = d.habitLogs.find(
+        (l) => l.habitId === habitId && l.date === date
+      );
+      if (existing) {
+        return {
+          ...d,
+          habitLogs: d.habitLogs.map((l) =>
+            l === existing ? { ...l, percent, note } : l
+          ),
+        };
+      }
+      return {
+        ...d,
+        habitLogs: [...d.habitLogs, { id: uid(), habitId, date, percent, note }],
+      };
+    });
+    setLogTarget(null);
+  };
+
+  const setAnchor = (habitId, date) => {
+    setData((d) => ({
+      ...d,
+      habits: d.habits.map((h) =>
+        h.id === habitId ? { ...h, anchorDate: date } : h
+      ),
+    }));
+  };
+
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const deleteHabit = (habitId) => {
+    setData((d) => ({
+      ...d,
+      habits: d.habits.filter((h) => h.id !== habitId),
+      habitLogs: d.habitLogs.filter((l) => l.habitId !== habitId),
+    }));
+    setDeleteTarget(null);
+  };
+
+  return (
+    <div className="flex flex-col h-full px-5 pt-8 pb-4 overflow-y-auto">
+      <div className="flex items-center justify-between mb-5">
+        <h2 className="text-xl font-bold" style={{ color: C.ink }}>
+          습관
+        </h2>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={manualSave}
+            className="flex items-center gap-1 text-xs px-3 py-2 rounded-full"
+            style={{ background: C.beige, color: C.ink }}
+          >
+            <Save size={13} />
+            {saveStatus === "saving" ? "저장 중…" : saveStatus === "saved" ? "저장됨 ✓" : "저장"}
+          </button>
+          <button
+            onClick={() => setShowAdd(true)}
+            className="flex items-center gap-1 text-sm px-3 py-2 rounded-full"
+            style={{ background: C.lavender, color: C.ink }}
+          >
+            <Plus size={16} /> 추가
+          </button>
+        </div>
+      </div>
+
+      {data.habits.length === 0 && (
+        <div className="text-sm text-center py-10" style={{ color: C.inkMuted }}>
+          아직 등록된 습관이 없어요. + 추가 로 시작해보세요.
+        </div>
+      )}
+
+      {data.habits.map((h) => (
+        <HabitCard
+          key={h.id}
+          habit={h}
+          logs={data.habitLogs.filter((l) => l.habitId === h.id)}
+          onLog={(habit, date) => setLogTarget({ habit, date })}
+          onSetAnchor={setAnchor}
+          onDelete={setDeleteTarget}
+        />
+      ))}
+
+      {logTarget && (
+        <HabitLogModal
+          habit={logTarget.habit}
+          initialDate={logTarget.date}
+          logs={data.habitLogs.filter((l) => l.habitId === logTarget.habit.id)}
+          onClose={() => setLogTarget(null)}
+          onSave={(date, percent, note) =>
+            saveLog(logTarget.habit.id, date, percent, note)
+          }
+        />
+      )}
+
+      {deleteTarget && (
+        <Modal onClose={() => setDeleteTarget(null)} title="습관 삭제">
+          <div className="text-sm mb-4" style={{ color: C.ink }}>
+            "{deleteTarget.name}" 습관을 삭제할까요? 지금까지 기록한 내용도 함께 사라져요.
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setDeleteTarget(null)}
+              className="flex-1 py-3 rounded-xl text-sm font-semibold"
+              style={{ background: C.bg, color: C.ink, border: `1px solid ${C.border}` }}
+            >
+              취소
+            </button>
+            <button
+              onClick={() => deleteHabit(deleteTarget.id)}
+              className="flex-1 py-3 rounded-xl text-sm font-semibold"
+              style={{ background: "#B25858", color: "#fff" }}
+            >
+              삭제
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {showAdd && (
+        <Modal onClose={() => setShowAdd(false)} title="새 습관">
+          <Field label="습관 이름">
+            <input
+              style={inputStyle}
+              value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+              placeholder="예: 매일 10분 독서"
+            />
+          </Field>
+          <Field label="목표 (선택)">
+            <input
+              style={inputStyle}
+              value={form.goal}
+              onChange={(e) => setForm((f) => ({ ...f, goal: e.target.value }))}
+              placeholder="예: 하루 10분"
+            />
+          </Field>
+          <Field label="색상">
+            <div className="flex gap-2">
+              {palette.map((c) => (
+                <button
+                  key={c}
+                  onClick={() => setForm((f) => ({ ...f, color: c }))}
+                  className="w-8 h-8 rounded-full"
+                  style={{
+                    background: c,
+                    outline: form.color === c ? `2px solid ${C.ink}` : "none",
+                    outlineOffset: 2,
+                  }}
+                />
+              ))}
+            </div>
+          </Field>
+          <Field label="아이콘 스타일">
+            <div className="flex gap-2">
+              {Object.keys(ICON_SETS).map((k) => (
+                <button
+                  key={k}
+                  onClick={() => setForm((f) => ({ ...f, iconSet: k }))}
+                  className="text-xs px-3 py-1.5 rounded-full flex items-center gap-1"
+                  style={
+                    form.iconSet === k
+                      ? { background: form.color, color: "#fff" }
+                      : { background: C.bg, color: C.ink, border: `1px solid ${C.border}` }
+                  }
+                >
+                  {ICON_SETS[k][3]} {k}
+                </button>
+              ))}
+            </div>
+          </Field>
+          <button
+            onClick={addHabit}
+            className="w-full py-3 rounded-xl text-sm font-semibold mt-2"
+            style={{ background: C.lavenderDeep, color: "#fff" }}
+          >
+            추가하기
+          </button>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Assistant (chat)                                                     */
+/* ------------------------------------------------------------------ */
+const SUGGESTIONS = [
+  "오늘 무슨 일을 해야 하나요?",
+  "오늘의 습관을 기록하시겠어요?",
+  "내일까지 할 일이 있나요?",
+];
+
+function buildSystemPrompt(data) {
+  return `너는 "My.비서"라는 일정관리 앱의 비서 챗봇이야. 대화 전체 맥락(이전 메시지 포함)을 참고해서, 아래 JSON 스키마로만 응답해. 다른 텍스트, 설명, 코드펜스 없이 순수 JSON 객체 하나만 출력해.
+
+스키마:
+{
+  "reply": "사용자에게 보여줄 다정하고 간결한 한국어 답변 (1~2문장)",
+  "actions": [ ...아래 타입 중 0개 이상... ]
+}
+
+action 타입:
+1) {"type":"add_schedule","title":"...","categoryId":"아래 카테고리 목록의 id 중 하나","startDate":"YYYY-MM-DD","endDate":"YYYY-MM-DD"}
+2) {"type":"update_status","titleMatch":"기존 항목 제목에 포함된 텍스트","status":"준비중|곧 시작|임박|종료"}
+3) {"type":"complete_schedule","titleMatch":"기존 항목 제목에 포함된 텍스트"}
+4) {"type":"log_habit","habitNameMatch":"습관 이름(없으면 새로 만들 이름)","percent":0-100,"note":"짧은 메모"}
+5) {"type":"add_habit","name":"...","goal":"예: 하루 10분 (선택, 없으면 빈 문자열)"}
+
+습관 규칙:
+- "현재 습관 목록"에 없는 습관을 사용자가 언급하면서 하는 중/기록하고 싶다고 하면, 먼저 add_habit으로 그 습관을 새로 만들고, 같은 응답의 actions 배열에 이어서 log_habit도 함께 넣어(habitNameMatch는 add_habit에서 쓴 name과 동일하게). 단순히 "습관을 시작하고 싶다/만들고 싶다"고만 하고 아직 실행 기록이 없으면 add_habit만 넣어.
+- 습관 기록 요청(예: "오늘 8분 독서했어", "요가 30분 했어", "오늘 운동 다녀왔어")은 목표 대비 퍼센트를 계산해서 반드시 log_habit 액션을 만들어. 목표를 모르거나 정확한 계산이 어려우면 정확도보다 "반드시 액션을 만드는 것"이 우선이야 — percent를 상식적으로 추정해서(예: "다 했어"=90~100, "조금 했어"=20~40, 구체적 시간이 있으면 목표 대비 비율로) 절대 actions를 비우지 마.
+- 습관 관련 메시지에는 위 되묻기(clarification) 규칙을 적용하지 마 — 습관 이름이 짧거나 구체적이지 않아도 되묻지 말고 사용자가 말한 그대로 이름으로 사용해서 바로 add_habit/log_habit을 실행해.
+- 예시) 사용자: "오늘부터 매일 스트레칭하기로 했고, 방금 5분 했어" → {"reply":"스트레칭 습관 시작했어요! 오늘 몫도 기록했어요.","actions":[{"type":"add_habit","name":"스트레칭","goal":""},{"type":"log_habit","habitNameMatch":"스트레칭","percent":70,"note":"5분"}]}
+
+날짜 규칙:
+- 오늘 날짜: ${todayStr()}
+- "내일"=오늘+1일, "모레"=오늘+2일, "글피"=오늘+3일. 요일 표현("이번 주 금요일" 등)은 가장 가까운 미래의 그 요일로 계산.
+- "~까지"는 endDate로 사용하고 startDate는 오늘 날짜로 둬. 정확한 YYYY-MM-DD로 변환해서 사용해.
+
+되묻기(clarification) 규칙:
+- 사용자가 말한 일정 제목이 구체적이지 않으면(예: 그냥 "과제", "시험", "일정"처럼 무엇인지 특정되지 않음) 바로 add_schedule을 만들지 말고, reply에서 "어떤 과제인가요?" 처럼 되물어보고 actions는 빈 배열로 둬.
+- 직전 네 메시지가 무엇인지 되물었고 이번 사용자 메시지가 그 답이라면: 사용자가 구체적인 이름을 말했으면 그 이름으로 title을 만들고("확률과통계 과제"), 사용자가 "그냥 과제야"/"몰라"처럼 구체적인 이름 없이 답했다면 title을 "과제"로 만들어.
+- 이미 구체적인 이름이 처음부터 포함되어 있으면(예: "A기업 서류") 되묻지 말고 바로 add_schedule을 만들어.
+
+기타 규칙:
+- 접수/제출/마감 같은 취업 관련 일정은 categoryId "job"(취업준비) 사용, 없으면 가장 비슷한 카테고리 사용.
+- 사용 가능한 카테고리 목록(id: 이름): ${data.categories.map((c) => `${c.id}: ${c.name}`).join(", ")}
+- 현재 체크리스트 항목: ${JSON.stringify(data.scheduleItems.map((i) => ({ title: i.title, status: i.status, endDate: i.endDate })))}
+- 현재 습관 목록: ${JSON.stringify(data.habits.map((h) => ({ name: h.name, goal: h.goal })))}
+- 새 일정을 만들 근거가 없으면 add_schedule을 만들지 마.
+- 순수 JSON 객체만 출력.`;
+}
+
+const HABIT_AUTO_COLORS = [
+  "#B7A4DE", "#D9B98C", "#C9A8C4", "#A9B7D9", "#CBB89A", "#8868B3",
+];
+
+function makeAutoHabit(name, goal, existingCount) {
+  return {
+    id: uid(),
+    name,
+    color: HABIT_AUTO_COLORS[existingCount % HABIT_AUTO_COLORS.length],
+    iconSet: "얼굴",
+    goal: goal || "",
+    startDate: todayStr(),
+    anchorDate: todayStr(),
+  };
+}
+
+function applyActions(actions, setData) {
+  if (!Array.isArray(actions)) return;
+  setData((d) => {
+    let next = {
+      ...d,
+      scheduleItems: [...d.scheduleItems],
+      habitLogs: [...d.habitLogs],
+      habits: [...d.habits],
+    };
+    for (const a of actions) {
+      if (a.type === "add_schedule") {
+        next.scheduleItems.push({
+          id: uid(),
+          title: a.title,
+          categoryId: a.categoryId || "todo",
+          startDate: a.startDate || todayStr(),
+          endDate: a.endDate || a.startDate || todayStr(),
+          status: "준비중",
+          completed: false,
+        });
+      } else if (a.type === "update_status") {
+        next.scheduleItems = next.scheduleItems.map((it) =>
+          it.title.includes(a.titleMatch)
+            ? { ...it, status: a.status, completed: a.status === "종료" }
+            : it
+        );
+      } else if (a.type === "complete_schedule") {
+        next.scheduleItems = next.scheduleItems.map((it) =>
+          it.title.includes(a.titleMatch)
+            ? { ...it, status: "종료", completed: true }
+            : it
+        );
+      } else if (a.type === "add_habit") {
+        const name = (a.name || "").trim();
+        if (!name) continue;
+        const exists = next.habits.find((h) => h.name === name);
+        if (!exists) {
+          next.habits.push(makeAutoHabit(name, a.goal, next.habits.length));
+        }
+      } else if (a.type === "log_habit") {
+        const nameMatch = (a.habitNameMatch || "").trim();
+        if (!nameMatch) continue;
+        let habit = next.habits.find((h) => h.name.includes(nameMatch));
+        if (!habit) {
+          habit = makeAutoHabit(nameMatch, "", next.habits.length);
+          next.habits.push(habit);
+        }
+        const percent = Math.max(
+          0,
+          Math.min(100, Number.isFinite(Number(a.percent)) ? Number(a.percent) : 50)
+        );
+        const date = todayStr();
+        const existing = next.habitLogs.find(
+          (l) => l.habitId === habit.id && l.date === date
+        );
+        if (existing) {
+          next.habitLogs = next.habitLogs.map((l) =>
+            l === existing ? { ...l, percent, note: a.note || "" } : l
+          );
+        } else {
+          next.habitLogs.push({
+            id: uid(),
+            habitId: habit.id,
+            date,
+            percent,
+            note: a.note || "",
+          });
+        }
+      }
+    }
+    return next;
+  });
+}
+
+function AssistantScreen({ data, setData, messages, setMessages }) {
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const bottomRef = useRef(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, busy]);
+
+  const send = async (text) => {
+    const t = text.trim();
+    if (!t || busy) return;
+    const userMsg = { id: uid(), role: "user", text: t };
+    const nextMessages = [...messages, userMsg];
+    setMessages(nextMessages);
+    setInput("");
+    setBusy(true);
+    try {
+      const apiMessages = nextMessages.map((m) => ({
+        role: m.role === "user" ? "user" : "assistant",
+        content: m.text,
+      }));
+      const json = await sendChat(buildSystemPrompt(data), apiMessages);
+      const raw = (json.content || [])
+        .map((c) => (c.type === "text" ? c.text : ""))
+        .join("");
+      const cleaned = raw.replace(/```json|```/g, "").trim();
+      const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+      let parsed;
+      try {
+        parsed = JSON.parse(jsonMatch ? jsonMatch[0] : cleaned);
+        if (!Array.isArray(parsed.actions)) parsed.actions = [];
+        if (typeof parsed.reply !== "string" || !parsed.reply.trim()) {
+          parsed.reply = "확인했어요.";
+        }
+      } catch (parseErr) {
+        console.error("mybiseo assistant JSON parse error", parseErr, raw);
+        parsed = {
+          reply: raw.trim() || "음, 잘 이해하지 못했어요. 다시 말씀해주실래요?",
+          actions: [],
+        };
+      }
+      applyActions(parsed.actions, setData);
+      setMessages((m) => [...m, { id: uid(), role: "assistant", text: parsed.reply }]);
+    } catch (e) {
+      console.error("mybiseo assistant request error", e);
+      setMessages((m) => [
+        ...m,
+        { id: uid(), role: "assistant", text: "연결에 문제가 있었어요. 잠시 후 다시 시도해주세요." },
+      ]);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="px-5 pt-8 pb-3">
+        <h2 className="text-xl font-bold" style={{ color: C.ink }}>
+          비서
+        </h2>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-5 space-y-3">
+        {messages.length === 0 && (
+          <div className="flex flex-wrap gap-2 mb-2">
+            {SUGGESTIONS.map((s) => (
+              <button
+                key={s}
+                onClick={() => send(s)}
+                className="text-xs px-3 py-2 rounded-2xl"
+                style={{ background: C.lavender, color: C.ink }}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        )}
+        {messages.map((m) => (
+          <div
+            key={m.id}
+            className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+          >
+            <div
+              className="max-w-[75%] text-sm px-4 py-2.5 rounded-2xl"
+              style={
+                m.role === "user"
+                  ? { background: C.lavenderDeep, color: "#fff", borderBottomRightRadius: 4 }
+                  : { background: C.card, color: C.ink, borderBottomLeftRadius: 4 }
+              }
+            >
+              {m.text}
+            </div>
+          </div>
+        ))}
+        {busy && (
+          <div className="flex justify-start">
+            <div
+              className="text-sm px-4 py-2.5 rounded-2xl"
+              style={{ background: C.card, color: C.inkMuted }}
+            >
+              생각 중…
+            </div>
+          </div>
+        )}
+        <div ref={bottomRef} />
+      </div>
+
+      <div className="px-4 py-3 flex items-center gap-2" style={{ borderTop: `1px solid ${C.border}` }}>
+        <input
+          style={{ ...inputStyle, flex: 1 }}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && send(input)}
+          placeholder="무엇을 도와드릴까요?"
+        />
+        <button
+          onClick={() => send(input)}
+          className="w-10 h-10 rounded-full flex items-center justify-center shrink-0"
+          style={{ background: C.lavenderDeep }}
+        >
+          <Send size={16} color="#fff" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Bottom nav + App shell                                               */
+/* ------------------------------------------------------------------ */
+function BottomNav({ screen, setScreen }) {
+  const items = [
+    { key: "home", icon: Home, label: "홈" },
+    { key: "calendar", icon: CalIcon, label: "캘린더" },
+    { key: "assistant", icon: MessageCircle, label: "비서" },
+    { key: "habits", icon: Sparkles, label: "습관" },
+    { key: "checklist", icon: CheckSquare, label: "체크리스트" },
+  ];
+  return (
+    <div
+      className="flex items-end justify-around py-2"
+      style={{ borderTop: `1px solid ${C.border}`, background: C.card }}
+    >
+      {items.map((it) => {
+        const activeItem = screen === it.key;
+        if (it.key === "assistant") {
+          return (
+            <button
+              key={it.key}
+              onClick={() => setScreen(it.key)}
+              className="flex flex-col items-center gap-0.5 px-2 -mt-5"
+            >
+              <span
+                className="w-11 h-11 rounded-full flex items-center justify-center shadow-md"
+                style={{ background: activeItem ? C.lavenderDeep : C.lavender }}
+              >
+                <it.icon size={20} color={activeItem ? "#fff" : C.lavenderDeep} />
+              </span>
+              <span
+                className="text-[10px] mt-0.5"
+                style={{ color: activeItem ? C.lavenderDeep : C.inkMuted }}
+              >
+                {it.label}
+              </span>
+            </button>
+          );
+        }
+        return (
+          <button
+            key={it.key}
+            onClick={() => setScreen(it.key)}
+            className="flex flex-col items-center gap-0.5 px-2 py-1"
+          >
+            <it.icon
+              size={20}
+              color={activeItem ? C.lavenderDeep : C.inkMuted}
+              fill={activeItem && it.key === "home" ? C.lavenderDeep : "none"}
+            />
+            <span
+              className="text-[10px]"
+              style={{ color: activeItem ? C.lavenderDeep : C.inkMuted }}
+            >
+              {it.label}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+export default function App() {
+  const [screen, setScreen] = useState("home");
+  const [data, setData] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [ready, setReady] = useState(false);
+  const [saveStatus, setSaveStatus] = useState("");
+  const [lastSaved, setLastSaved] = useState(null);
+  const [loadedFromStorage, setLoadedFromStorage] = useState(false);
+  const skipNextSave = useRef(true);
+
+  useEffect(() => {
+    (async () => {
+      const d = await loadData();
+      const m = await loadMessages();
+      const hasRealData = d && d !== "LOAD_FAILED";
+      setData(
+        hasRealData
+          ? d
+          : {
+              categories: DEFAULT_CATEGORIES,
+              scheduleItems: [],
+              habits: [],
+              habitLogs: [],
+            }
+      );
+      setLoadedFromStorage(!!hasRealData);
+      setMessages(m || []);
+      setReady(true);
+    })();
+  }, []);
+
+  // auto-escalate to 임박 within 2 days
+  useEffect(() => {
+    if (!data) return;
+    const today = todayStr();
+    let changed = false;
+    const items = data.scheduleItems.map((it) => {
+      if (it.completed) return it;
+      const diff = dayDiff(today, it.endDate);
+      if (diff <= 2 && diff >= 0 && it.status !== "임박") {
+        changed = true;
+        return { ...it, status: "임박" };
+      }
+      return it;
+    });
+    if (changed) setData((d) => ({ ...d, scheduleItems: items }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready]);
+
+  useEffect(() => {
+    if (!ready || !data) return;
+    if (skipNextSave.current) {
+      skipNextSave.current = false;
+      return;
+    }
+    saveData(data).then(() => setLastSaved(new Date()));
+  }, [data, ready]);
+
+  useEffect(() => {
+    if (ready) saveMessages(messages);
+  }, [messages, ready]);
+
+  const manualSave = async () => {
+    setSaveStatus("saving");
+    await saveData(data);
+    await saveMessages(messages);
+    setLastSaved(new Date());
+    setSaveStatus("saved");
+    setTimeout(() => setSaveStatus(""), 1500);
+  };
+
+  if (!ready || !data) {
+    return (
+      <div
+        className="w-full h-full flex items-center justify-center"
+        style={{ background: C.bg }}
+      >
+        <div className="text-sm" style={{ color: C.inkMuted }}>
+          불러오는 중…
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="w-full mx-auto flex flex-col"
+      style={{
+        maxWidth: 420,
+        height: "100vh",
+        background: C.bg,
+        fontFamily:
+          "'Apple SD Gothic Neo', 'Malgun Gothic', system-ui, -apple-system, sans-serif",
+      }}
+    >
+      <div className="flex-1 overflow-hidden relative">
+        {screen === "home" && (
+          <Home_
+            setScreen={setScreen}
+            scheduleItems={data.scheduleItems}
+            onManualSave={manualSave}
+            saveStatus={saveStatus}
+            lastSaved={lastSaved}
+            loadedFromStorage={loadedFromStorage}
+            data={data}
+            setData={setData}
+          />
+        )}
+        {screen === "calendar" && <CalendarScreen data={data} setData={setData} />}
+        {screen === "checklist" && <ChecklistScreen data={data} setData={setData} />}
+        {screen === "habits" && <HabitsScreen data={data} setData={setData} />}
+        {screen === "assistant" && (
+          <AssistantScreen
+            data={data}
+            setData={setData}
+            messages={messages}
+            setMessages={setMessages}
+          />
+        )}
+      </div>
+      <BottomNav screen={screen} setScreen={setScreen} />
+    </div>
+  );
+}
