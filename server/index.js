@@ -59,6 +59,14 @@ app.post("/api/chat", async (req, res) => {
 });
 
 /* ------------------------------------------------------------------ */
+/* Health check — used by hosting platforms (Render, Railway) to        */
+/* confirm the service is up.                                          */
+/* ------------------------------------------------------------------ */
+app.get("/api/health", (req, res) => {
+  res.json({ ok: true });
+});
+
+/* ------------------------------------------------------------------ */
 /* Serve the production build (npm run build) when it exists.           */
 /* ------------------------------------------------------------------ */
 const distDir = path.join(__dirname, "..", "dist");
