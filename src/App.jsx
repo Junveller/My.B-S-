@@ -46,8 +46,12 @@ const ICON_SETS = {
 };
 
 const uid = () => Math.random().toString(36).slice(2, 10);
-const todayStr = () => new Date().toISOString().slice(0, 10);
-const fmt = (d) => d.toISOString().slice(0, 10);
+// Local calendar date, not UTC: toISOString() would shift the date back
+// a day for any timezone ahead of UTC (e.g. KST) once it's past local
+// midnight but still the previous day in UTC.
+const fmt = (d) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const todayStr = () => fmt(new Date());
 const addDays = (dateStr, n) => {
   const d = new Date(dateStr + "T00:00:00");
   d.setDate(d.getDate() + n);
@@ -1384,11 +1388,12 @@ function ChecklistScreen({ data, setData }) {
 /* ------------------------------------------------------------------ */
 /* Habits                                                               */
 /* ------------------------------------------------------------------ */
-function HabitLogModal({ habit, initialDate, logs, onSave, onClose }) {
+function HabitLogModal({ habit, initialDate, logs, onSave, onDelete, onClose }) {
   const [date, setDate] = useState(initialDate);
   const currentLog = logs.find((l) => l.date === date);
   const [percent, setPercent] = useState(currentLog?.percent ?? 50);
   const [note, setNote] = useState(currentLog?.note ?? "");
+  const hasLog = !!logs.find((l) => l.date === date);
 
   useEffect(() => {
     const l = logs.find((x) => x.date === date);
@@ -1400,13 +1405,24 @@ function HabitLogModal({ habit, initialDate, logs, onSave, onClose }) {
   return (
     <Modal onClose={onClose} title={habit.name}>
       <Field label="날짜">
-        <input
-          type="date"
-          style={inputStyle}
-          value={date}
-          max={todayStr()}
-          onChange={(e) => setDate(e.target.value)}
-        />
+        <div className="flex items-center gap-2">
+          <input
+            type="date"
+            style={{ ...inputStyle, flex: 1 }}
+            value={date}
+            max={todayStr()}
+            onChange={(e) => setDate(e.target.value)}
+          />
+          {hasLog && (
+            <button
+              onClick={() => onDelete(date)}
+              className="text-[11px] px-2 py-2 rounded-lg shrink-0"
+              style={{ color: "#B25858", border: `1px solid ${C.border}`, background: C.bg }}
+            >
+              삭제
+            </button>
+          )}
+        </div>
       </Field>
       <div className="text-center mb-4">
         <div className="text-4xl mb-2">
@@ -1596,6 +1612,16 @@ function HabitsScreen({ data, setData }) {
     setLogTarget(null);
   };
 
+  const deleteLog = (habitId, date) => {
+    setData((d) => ({
+      ...d,
+      habitLogs: d.habitLogs.filter(
+        (l) => !(l.habitId === habitId && l.date === date)
+      ),
+    }));
+    setLogTarget(null);
+  };
+
   const setAnchor = (habitId, date) => {
     setData((d) => ({
       ...d,
@@ -1666,6 +1692,7 @@ function HabitsScreen({ data, setData }) {
           onSave={(date, percent, note) =>
             saveLog(logTarget.habit.id, date, percent, note)
           }
+          onDelete={(date) => deleteLog(logTarget.habit.id, date)}
         />
       )}
 
