@@ -29,6 +29,10 @@ app.post("/api/chat", async (req, res) => {
   }
 
   try {
+    // Prefill the assistant turn with "{" so the model must continue
+    // straight into JSON instead of possibly prefacing it with chat
+    // ("Sure, here's the JSON:") that breaks the client's parser and
+    // silently drops the actions array.
     const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -38,9 +42,9 @@ app.post("/api/chat", async (req, res) => {
       },
       body: JSON.stringify({
         model: ANTHROPIC_MODEL,
-        max_tokens: 800,
+        max_tokens: 1024,
         system,
-        messages,
+        messages: [...messages, { role: "assistant", content: "{" }],
       }),
     });
 
@@ -50,6 +54,16 @@ app.post("/api/chat", async (req, res) => {
       return res.status(anthropicRes.status).json({
         error: json?.error?.message || "Anthropic API request failed",
       });
+    }
+
+    // The model's reply continues from the "{" prefill above, so the
+    // prefix is missing from what it returns — add it back before
+    // handing the response to the client.
+    const firstText = json.content?.find((c) => c.type === "text");
+    if (firstText) {
+      firstText.text = "{" + firstText.text;
+    } else {
+      console.error("mybiseo /api/chat: no text block in Anthropic response", json);
     }
     res.json(json);
   } catch (e) {
