@@ -1,9 +1,9 @@
 /* ------------------------------------------------------------------ */
 /* Backend API client                                                  */
 /*                                                                       */
-/* The Anthropic API key must never live in the browser. The client     */
+/* The Gemini API key must never live in the browser. The client        */
 /* only ever calls our own /api/chat endpoint; the server attaches      */
-/* ANTHROPIC_API_KEY and forwards the request to Anthropic.             */
+/* GEMINI_API_KEY and forwards the request to Google's Gemini API.      */
 /* ------------------------------------------------------------------ */
 
 export async function sendChat(system, messages) {
@@ -16,5 +16,5 @@ export async function sendChat(system, messages) {
     const errBody = await res.json().catch(() => ({}));
     throw new Error(errBody.error || `chat request failed (${res.status})`);
   }
-  return res.json(); // Anthropic Messages API response shape: { content: [...] }
+  return res.json(); // { content: [{ type: "text", text }] } — same shape regardless of backend LLM
 }

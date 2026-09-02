@@ -6,67 +6,64 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const PORT = process.env.PORT || 5174;
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-5";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
 /* ------------------------------------------------------------------ */
 /* JSON schema for the assistant's structured reply. Passed as          */
-/* output_config.format so the Messages API itself guarantees the       */
-/* first content block is valid JSON matching this shape — no assistant */
-/* prefill (unsupported / 400 on claude-sonnet-5 and newer) and no      */
-/* "please only output JSON" prompt-begging required.                   */
+/* generationConfig.responseSchema (Gemini's OpenAPI-subset dialect —   */
+/* UPPERCASE type names, no additionalProperties) so the API itself     */
+/* guarantees the response text is valid JSON matching this shape.      */
+/* Flat shape: every action field any type might use, all optional      */
+/* except "type". applyActions() on the client already branches on      */
+/* a.type and only reads the fields relevant to that branch.            */
 /* ------------------------------------------------------------------ */
-// Flat (no anyOf-in-array-items — undocumented/untested combination for
-// this API) shape: every action field any type might use, all optional
-// except "type". applyActions() on the client already branches on
-// a.type and only reads the fields relevant to that branch, so unused
-// fields being absent (or model-supplied null) is harmless.
 const REPLY_SCHEMA = {
-  type: "object",
+  type: "OBJECT",
   properties: {
-    reply: { type: "string" },
+    reply: { type: "STRING" },
     actions: {
-      type: "array",
+      type: "ARRAY",
       items: {
-        type: "object",
+        type: "OBJECT",
         properties: {
           type: {
-            type: "string",
+            type: "STRING",
             enum: ["add_schedule", "update_status", "complete_schedule", "log_habit", "add_habit"],
           },
-          title: { type: "string" },
-          categoryId: { type: "string" },
-          startDate: { type: "string" },
-          endDate: { type: "string" },
-          titleMatch: { type: "string" },
-          status: { type: "string", enum: ["준비중", "곧 시작", "임박", "종료"] },
-          habitNameMatch: { type: "string" },
-          percent: { type: "integer" },
-          note: { type: "string" },
-          name: { type: "string" },
-          goal: { type: "string" },
+          title: { type: "STRING" },
+          categoryId: { type: "STRING" },
+          startDate: { type: "STRING" },
+          endDate: { type: "STRING" },
+          titleMatch: { type: "STRING" },
+          status: { type: "STRING", enum: ["준비중", "곧 시작", "임박", "종료"] },
+          habitNameMatch: { type: "STRING" },
+          percent: { type: "INTEGER" },
+          note: { type: "STRING" },
+          name: { type: "STRING" },
+          goal: { type: "STRING" },
         },
         required: ["type"],
-        additionalProperties: false,
       },
     },
   },
   required: ["reply", "actions"],
-  additionalProperties: false,
 };
 
 /* ------------------------------------------------------------------ */
-/* /api/chat — proxies the assistant conversation to the Anthropic      */
-/* Messages API. The API key stays on the server; the client only       */
-/* ever sends the system prompt + message history it already builds.   */
+/* /api/chat — proxies the assistant conversation to the Gemini         */
+/* generateContent API. The API key stays on the server; the client     */
+/* only ever sends the system prompt + message history it already      */
+/* builds, and gets back the same { content: [{type:"text", text}] }    */
+/* envelope it always has — only the backend swapped, not the contract. */
 /* ------------------------------------------------------------------ */
 app.post("/api/chat", async (req, res) => {
-  if (!ANTHROPIC_API_KEY) {
-    console.error("ANTHROPIC_API_KEY is not set");
-    return res.status(500).json({ error: "서버에 ANTHROPIC_API_KEY가 설정되어 있지 않아요." });
+  if (!GEMINI_API_KEY) {
+    console.error("GEMINI_API_KEY is not set");
+    return res.status(500).json({ error: "서버에 GEMINI_API_KEY가 설정되어 있지 않아요." });
   }
 
   const { system, messages } = req.body || {};
@@ -75,36 +72,53 @@ app.post("/api/chat", async (req, res) => {
   }
 
   try {
-    const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: ANTHROPIC_MODEL,
-        max_tokens: 1024,
-        system,
-        messages,
-        output_config: { format: { type: "json_schema", schema: REPLY_SCHEMA } },
-      }),
-    });
+    const geminiRes = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": GEMINI_API_KEY,
+        },
+        body: JSON.stringify({
+          contents: messages.map((m) => ({
+            role: m.role === "assistant" ? "model" : "user",
+            parts: [{ text: m.content }],
+          })),
+          systemInstruction: { parts: [{ text: system }] },
+          generationConfig: {
+            maxOutputTokens: 1024,
+            responseMimeType: "application/json",
+            responseSchema: REPLY_SCHEMA,
+          },
+        }),
+      }
+    );
 
-    const json = await anthropicRes.json();
-    if (!anthropicRes.ok) {
-      console.error("Anthropic API error", anthropicRes.status, json);
-      return res.status(anthropicRes.status).json({
-        error: json?.error?.message || "Anthropic API request failed",
+    const json = await geminiRes.json();
+    if (!geminiRes.ok) {
+      console.error("Gemini API error", geminiRes.status, json);
+      return res.status(geminiRes.status).json({
+        error: json?.error?.message || "Gemini API request failed",
       });
     }
-    if (json.stop_reason === "refusal") {
-      console.error("mybiseo /api/chat: model refused", json.stop_details);
+
+    const candidate = json.candidates?.[0];
+    const text = candidate?.content?.parts?.map((p) => p.text || "").join("");
+    if (!text) {
+      console.error(
+        "mybiseo /api/chat: no text in Gemini response",
+        json.promptFeedback,
+        candidate?.finishReason
+      );
       return res.status(200).json({
         content: [{ type: "text", text: JSON.stringify({ reply: "이 요청은 도와드리기 어려워요.", actions: [] }) }],
       });
     }
-    res.json(json);
+
+    // Re-wrap into the same { content: [{type, text}] } shape the client
+    // already parses, so nothing on the frontend needs to change.
+    res.json({ content: [{ type: "text", text }] });
   } catch (e) {
     console.error("chat proxy error", e);
     res.status(502).json({ error: "비서 서버 연결에 실패했어요." });

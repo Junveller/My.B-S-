@@ -8,13 +8,13 @@
   - `src/App.jsx` — 전체 UI/화면
   - `src/lib/storage.js` — 데이터 읽기/쓰기 (현재 `localStorage`, 나중에 백엔드로 교체 가능하도록 함수로 분리됨)
   - `src/lib/api.js` — 비서 채팅 요청 (`/api/chat`으로만 호출, API 키 없음)
-- `server/index.js` — Express 서버. `/api/chat`에서 `ANTHROPIC_API_KEY`로 Anthropic API를 대신 호출하고, 프로덕션 빌드(`dist/`)도 서빙합니다.
+- `server/index.js` — Express 서버. `/api/chat`에서 `GEMINI_API_KEY`로 Google Gemini API(`generateContent`)를 대신 호출하고, 프로덕션 빌드(`dist/`)도 서빙합니다.
 
 ## 시작하기
 
 ```bash
 npm install
-cp .env.example .env   # ANTHROPIC_API_KEY 값을 채워주세요
+cp .env.example .env   # GEMINI_API_KEY 값을 채워주세요 (Google AI Studio에서 발급)
 npm run dev             # 클라이언트(5173) + 서버(5174) 동시 실행
 ```
 
@@ -33,7 +33,7 @@ npm start        # Express가 dist/ 정적 파일 + /api/chat 서빙
 
 ## 비서(AI 챗봇)
 
-브라우저는 Anthropic API 키를 절대 갖지 않습니다. 채팅 메시지는 `/api/chat`(Express)으로 전송되고, 서버가 `ANTHROPIC_API_KEY` 환경변수로 Anthropic Messages API를 호출한 뒤 응답을 그대로 클라이언트에 반환합니다.
+브라우저는 Gemini API 키를 절대 갖지 않습니다. 채팅 메시지는 `/api/chat`(Express)으로 전송되고, 서버가 `GEMINI_API_KEY` 환경변수로 Google Gemini API(`gemini-2.5-flash`, 무료 티어)의 `generateContent`를 호출합니다. `generationConfig.responseSchema`로 `{ reply, actions[] }` 형태의 JSON만 나오도록 강제하고, 그 결과를 클라이언트가 원래 기대하던 `{ content: [{ type: "text", text }] }` 형태로 그대로 감싸 돌려주기 때문에 프론트엔드 코드는 전혀 바뀌지 않았습니다. Gemini API 키는 [Google AI Studio](https://aistudio.google.com/apikey)에서 무료로 발급받을 수 있습니다.
 
 ## 배포 (Render / Railway)
 
@@ -42,14 +42,14 @@ npm start        # Express가 dist/ 정적 파일 + /api/chat 서빙
 - `render.yaml` — Render Blueprint. 빌드: `npm install && npm run build`, 실행: `npm start`, 헬스체크: `/api/health`
 - `railway.json` — Railway 설정. 동일한 빌드/실행 커맨드 사용
 
-공통적으로 필요한 건 딱 하나, **환경변수 `ANTHROPIC_API_KEY`** 입니다(Anthropic 콘솔에서 발급). 두 파일 모두 이 값은 `sync: false`로 되어 있어 저장소에 커밋되지 않고, 배포 후 각 플랫폼 대시보드에서 직접 입력해야 합니다.
+공통적으로 필요한 건 딱 하나, **환경변수 `GEMINI_API_KEY`** 입니다([Google AI Studio](https://aistudio.google.com/apikey)에서 무료 발급). 두 파일 모두 이 값은 `sync: false`로 되어 있어 저장소에 커밋되지 않고, 배포 후 각 플랫폼 대시보드에서 직접 입력해야 합니다.
 
 ### A. Render로 배포하기
 
 1. https://render.com 에서 계정을 만들고 GitHub 계정을 연결합니다.
 2. 대시보드에서 **New +** → **Blueprint** 선택.
 3. 이 저장소(`Junveller/My.B-S-`)를 선택하고, 배포할 브랜치로 `claude/vite-react-migration-ip2qq5`(또는 머지된 `main`)를 지정합니다. Render가 루트의 `render.yaml`을 자동으로 읽어 서비스를 구성합니다.
-4. **Apply**를 누르면 서비스가 생성되지만, `ANTHROPIC_API_KEY`가 비어 있어 빌드 후 첫 배포 상태가 "환경변수 필요"로 표시됩니다. 서비스 페이지 → **Environment** 탭에서 `ANTHROPIC_API_KEY` 값을 입력하고 저장합니다.
+4. **Apply**를 누르면 서비스가 생성되지만, `GEMINI_API_KEY`가 비어 있어 빌드 후 첫 배포 상태가 "환경변수 필요"로 표시됩니다. 서비스 페이지 → **Environment** 탭에서 `GEMINI_API_KEY` 값을 입력하고 저장합니다.
 5. 저장하면 자동으로 재배포됩니다. 배포가 끝나면 서비스 페이지 상단에 `https://my-biseo-xxxx.onrender.com` 형태의 주소가 생깁니다 — 이게 실제 배포 URL입니다.
 6. 무료 플랜은 일정 시간 요청이 없으면 슬립 상태가 되고, 다음 요청 시 다시 깨어나는 데 수십 초가 걸릴 수 있습니다. 상시 서비스가 필요하면 유료 플랜으로 업그레이드하세요.
 
@@ -58,7 +58,7 @@ npm start        # Express가 dist/ 정적 파일 + /api/chat 서빙
 1. https://railway.app 에서 계정을 만들고 GitHub 계정을 연결합니다.
 2. **New Project** → **Deploy from GitHub repo** → 이 저장소 선택.
 3. 배포할 브랜치를 `claude/vite-react-migration-ip2qq5`(또는 머지된 `main`)로 지정합니다. Railway가 루트의 `railway.json`을 읽어 빌드/실행 커맨드를 설정합니다.
-4. 서비스 생성 후 **Variables** 탭에서 `ANTHROPIC_API_KEY`를 추가합니다(필요하면 `ANTHROPIC_MODEL`도).
+4. 서비스 생성 후 **Variables** 탭에서 `GEMINI_API_KEY`를 추가합니다(필요하면 `GEMINI_MODEL`도).
 5. **Settings** → **Networking**에서 **Generate Domain**을 눌러 `https://my-biseo-production.up.railway.app` 같은 공개 주소를 발급받습니다.
 6. 이후 브랜치에 새 커밋을 푸시하면 Railway가 자동으로 재빌드/재배포합니다.
 
