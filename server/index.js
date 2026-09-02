@@ -89,7 +89,7 @@ app.post("/api/chat", async (req, res) => {
           })),
           systemInstruction: { parts: [{ text: system }] },
           generationConfig: {
-            maxOutputTokens: 1024,
+            maxOutputTokens: 2048,
             responseMimeType: "application/json",
             responseSchema: REPLY_SCHEMA,
           },
@@ -105,6 +105,12 @@ app.post("/api/chat", async (req, res) => {
       });
     }
 
+    const FALLBACK_TEXT = JSON.stringify({
+      reply: "죄송해요, 응답을 처리하는 중에 문제가 있었어요. 다시 한 번 말씀해주실래요?",
+      actions: [],
+      askDateChoice: false,
+    });
+
     const candidate = json.candidates?.[0];
     const text = candidate?.content?.parts?.map((p) => p.text || "").join("");
     if (!text) {
@@ -113,14 +119,30 @@ app.post("/api/chat", async (req, res) => {
         json.promptFeedback,
         candidate?.finishReason
       );
-      return res.status(200).json({
-        content: [{ type: "text", text: JSON.stringify({ reply: "이 요청은 도와드리기 어려워요.", actions: [] }) }],
+      return res.status(200).json({ content: [{ type: "text", text: FALLBACK_TEXT }] });
+    }
+
+    // Validate the model actually returned complete, parseable JSON
+    // before it ever reaches the client — a truncated response (e.g.
+    // finishReason "MAX_TOKENS") produces broken JSON that must never
+    // be shown to the user as-is. The raw text is logged here (server
+    // log only) for debugging; the client only ever sees FALLBACK_TEXT
+    // in that case.
+    let safeText = text;
+    try {
+      JSON.parse(text);
+    } catch (parseErr) {
+      console.error("mybiseo /api/chat: Gemini returned invalid/truncated JSON", {
+        finishReason: candidate?.finishReason,
+        parseError: String(parseErr),
+        rawText: text,
       });
+      safeText = FALLBACK_TEXT;
     }
 
     // Re-wrap into the same { content: [{type, text}] } shape the client
     // already parses, so nothing on the frontend needs to change.
-    res.json({ content: [{ type: "text", text }] });
+    res.json({ content: [{ type: "text", text: safeText }] });
   } catch (e) {
     console.error("chat proxy error", e);
     res.status(502).json({ error: "비서 서버 연결에 실패했어요." });

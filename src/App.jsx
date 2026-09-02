@@ -1856,7 +1856,7 @@ action 타입:
 - 현재 습관 목록: ${JSON.stringify(data.habits.map((h) => ({ name: h.name, goal: h.goal })))}
 - 새 일정을 만들 근거가 없으면 add_schedule을 만들지 마.
 - add_schedule로 만든 일정은 체크리스트와 캘린더 양쪽에 자동으로 반영되니 따로 안내할 필요 없어.
-- 순수 JSON 객체만 출력.`;
+- 각 action 객체에는 위 action 타입에 정의된 필드만 넣고, 그 타입에 정의되지 않은 필드(예: add_schedule에 titleMatch를 넣는 것처럼)는 절대 추가하지 마. 반드시 완결된 순수 JSON만 출력해 — 중간에 잘리거나 깨진 형태로 끝내지 마.`;
 }
 
 const HABIT_AUTO_COLORS = [
@@ -2012,9 +2012,12 @@ function AssistantScreen({ data, setData, messages, setMessages }) {
         }
         parsed.askDateChoice = parsed.askDateChoice === true;
       } catch (parseErr) {
+        // Never show the raw model output to the user — it can be
+        // truncated/broken JSON. Log it for debugging only; the server
+        // already guards against this too, so this is a last-resort fallback.
         console.error("mybiseo assistant JSON parse error", parseErr, raw);
         parsed = {
-          reply: raw.trim() || "음, 잘 이해하지 못했어요. 다시 말씀해주실래요?",
+          reply: "죄송해요, 응답을 처리하는 중에 문제가 있었어요. 다시 한 번 말씀해주실래요?",
           actions: [],
           askDateChoice: false,
         };
