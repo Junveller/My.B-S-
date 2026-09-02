@@ -22,6 +22,16 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
 const app = express();
+// Render puts exactly one reverse proxy in front of the app, which sets
+// X-Forwarded-For. Trusting proxies indiscriminately (`true`) is what
+// makes express-rate-limit refuse to run (ERR_ERL_UNEXPECTED_X_FORWARDED_FOR)
+// — it won't trust a client-spoofable header when *every* proxy is
+// trusted. Leaving trust proxy unset has the same header/config mismatch
+// (Express ignores X-Forwarded-For while Render's proxy still sends it,
+// so req.ip becomes the proxy's own IP for every request and every user
+// shares one rate-limit bucket) and throws the identical error. Trusting
+// exactly one hop is what Render's own topology calls for either way.
+app.set("trust proxy", 1);
 app.use(express.json({ limit: "1mb" }));
 
 /* ------------------------------------------------------------------ */
@@ -292,6 +302,26 @@ app.get("*", (req, res, next) => {
   if (req.path.startsWith("/api")) return next();
   res.sendFile(path.join(distDir, "index.html"), (err) => {
     if (err) next();
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Catch-all error handler. Without this, an error thrown inside any     */
+/* middleware that runs *before* a route's own try/catch — anything from */
+/* a future express-rate-limit change to an unexpected Firestore/JWT     */
+/* failure — falls through to Express's default error page: often HTML, */
+/* not JSON, which the client's res.json() silently fails to parse and   */
+/* reports as a vague "요청에 실패했어요." nowhere near the real cause.   */
+/* This guarantees every route always returns a real, parseable          */
+/* { error } message, and logs the actual error server-side for          */
+/* diagnosis. Must be registered last — Express identifies error         */
+/* handlers by their 4-argument shape.                                   */
+/* ------------------------------------------------------------------ */
+app.use((err, req, res, next) => {
+  console.error(`Unhandled error on ${req.method} ${req.path}`, err);
+  if (res.headersSent) return next(err);
+  res.status(err.status || err.statusCode || 500).json({
+    error: "서버에 문제가 생겼어요. 잠시 후 다시 시도해주세요.",
   });
 });
 
