@@ -1836,6 +1836,7 @@ action 타입:
 - "현재 체크리스트 항목"에 있는 기존 항목들이 실제로 어느 categoryId에 들어있는지도 참고 자료로 활용해. 지금 사용자가 말한 내용과 성격이 비슷한 기존 항목이 이미 있다면, 그 항목과 같은 카테고리를 우선으로 선택해.
 - 사용자가 카테고리 이름을 메시지에서 직접 언급했으면 그 카테고리를 우선 사용해.
 - 그래도 애매하면 내용상 가장 비슷한 카테고리를 고르고, 정말 판단이 안 서면 가장 범용적인 카테고리(예: "todo 리스트" 성격의 카테고리)를 사용해.
+- 특히 "회사이름 + 채용/접수/제출"처럼 회사명과 채용 관련 동작이 함께 나오는 문장(예: "네이버 채용 접수", "카카오 서류 제출", "삼성 신입공채")은, 취업/구직을 뜻하는 카테고리(예: "취업준비", "구직")가 목록에 있다면 반드시 그 카테고리의 id를 categoryId로 써야 해 — "todo 리스트" 같은 범용 카테고리로 흘려보내지 마.
 
 일정 제목 추출 규칙:
 - 사용자 메시지가 "카테고리 이름 + 날짜 범위 + 나머지 설명"을 한 번에 담고 있으면(예: "취업준비에 A 그룹 9/1~9/14 신입채용 추가해줘", "A 그룹 9/1~9/14 신입채용"), 메시지에서 카테고리 이름과 날짜 표현을 뺀 나머지를 title로 사용해(예: "A 그룹 신입채용"). 이런 메시지는 이미 구체적인 것으로 보고 되묻지 마.
@@ -1874,6 +1875,26 @@ function makeAutoHabit(name, goal, existingCount) {
   };
 }
 
+// Resolves whatever categoryId the model returned against the user's
+// actual categories: exact id match, then exact name match (the model
+// sometimes echoes the category's name instead of its id), then a
+// loose substring match, and only then falls back — to the first
+// category in the list, not a hardcoded "todo" that may not exist or
+// may no longer be what the user considers their default.
+function resolveCategoryId(categories, rawCategoryId) {
+  if (!categories.length) return rawCategoryId || "";
+  if (categories.some((c) => c.id === rawCategoryId)) return rawCategoryId;
+  const byName = categories.find((c) => c.name === rawCategoryId);
+  if (byName) return byName.id;
+  if (rawCategoryId) {
+    const byLooseName = categories.find(
+      (c) => c.name.includes(rawCategoryId) || rawCategoryId.includes(c.name)
+    );
+    if (byLooseName) return byLooseName.id;
+  }
+  return categories[0].id;
+}
+
 function applyActions(actions, setData) {
   if (!Array.isArray(actions)) return;
   setData((d) => {
@@ -1888,7 +1909,7 @@ function applyActions(actions, setData) {
         next.scheduleItems.push({
           id: uid(),
           title: a.title,
-          categoryId: a.categoryId || "todo",
+          categoryId: resolveCategoryId(next.categories, a.categoryId),
           startDate: a.startDate || todayStr(),
           endDate: a.endDate || a.startDate || todayStr(),
           status: "준비중",
@@ -2322,7 +2343,8 @@ export default function App() {
       className="w-full mx-auto flex flex-col"
       style={{
         maxWidth: 420,
-        height: "100vh",
+        height: "100dvh",
+        overflow: "hidden",
         background: C.bg,
         fontFamily:
           "'Apple SD Gothic Neo', 'Malgun Gothic', system-ui, -apple-system, sans-serif",
