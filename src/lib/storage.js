@@ -1,55 +1,83 @@
 /* ------------------------------------------------------------------ */
 /* Storage layer                                                       */
 /*                                                                       */
-/* Currently backed by browser localStorage. Every read/write in the    */
-/* app goes through loadData/saveData/loadMessages/saveMessages below,  */
-/* so migrating to a backend (e.g. Node/Express + SQLite) later only    */
-/* means rewriting the bodies of readKey/writeKey to call an API        */
-/* (GET/PUT /api/storage/:key) instead of localStorage — nothing in     */
-/* App.jsx or the screens needs to change.                              */
+/* Backed by the server's per-account Postgres row (see server/db.js —  */
+/* table app_data) instead of localStorage, so data follows the logged- */
+/* in account rather than the browser. Every read/write in the app      */
+/* still goes through loadData/saveData/loadMessages/saveMessages       */
+/* below, so screens didn't need to change when this swapped over.      */
 /* ------------------------------------------------------------------ */
 
-const KEYS = {
-  data: "mybiseo-data",
-  chat: "mybiseo-chat",
-};
+import { getToken, clearSession } from "./auth.js";
 
-async function readKey(key) {
-  try {
-    const raw = window.localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : null;
-  } catch (e) {
-    console.error(`mybiseo storage read error (${key})`, e);
-    return "LOAD_FAILED";
+async function authedFetch(path, options = {}) {
+  const token = getToken();
+  const res = await fetch(path, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.headers || {}),
+    },
+  });
+  if (res.status === 401) {
+    clearSession();
+    const err = new Error("세션이 만료됐어요. 다시 로그인해주세요.");
+    err.code = "SESSION_EXPIRED";
+    throw err;
   }
-}
-
-async function writeKey(key, value) {
-  try {
-    window.localStorage.setItem(key, JSON.stringify(value));
-    return true;
-  } catch (e) {
-    console.error(`mybiseo storage write error (${key})`, e);
-    return false;
-  }
+  return res;
 }
 
 export async function loadData() {
   // returns: null (nothing saved yet) | "LOAD_FAILED" | the saved data object
-  return readKey(KEYS.data);
+  try {
+    const res = await authedFetch("/api/data");
+    if (!res.ok) return "LOAD_FAILED";
+    const json = await res.json();
+    return json.data ?? null;
+  } catch (e) {
+    if (e.code === "SESSION_EXPIRED") throw e;
+    console.error("mybiseo storage load error", e);
+    return "LOAD_FAILED";
+  }
 }
 
 export async function saveData(data) {
-  const ok = await writeKey(KEYS.data, data);
-  if (!ok) console.error("mybiseo save failed");
-  return ok;
+  try {
+    const res = await authedFetch("/api/data", { method: "PUT", body: JSON.stringify({ data }) });
+    if (!res.ok) console.error("mybiseo save failed");
+    return res.ok;
+  } catch (e) {
+    if (e.code === "SESSION_EXPIRED") throw e;
+    console.error("mybiseo storage save error", e);
+    return false;
+  }
 }
 
 export async function loadMessages() {
-  const res = await readKey(KEYS.chat);
-  return res === "LOAD_FAILED" ? null : res;
+  try {
+    const res = await authedFetch("/api/data");
+    if (!res.ok) return null;
+    const json = await res.json();
+    return json.messages ?? null;
+  } catch (e) {
+    if (e.code === "SESSION_EXPIRED") throw e;
+    console.error("mybiseo storage load error", e);
+    return null;
+  }
 }
 
 export async function saveMessages(msgs) {
-  return writeKey(KEYS.chat, msgs);
+  try {
+    const res = await authedFetch("/api/messages", {
+      method: "PUT",
+      body: JSON.stringify({ messages: msgs }),
+    });
+    return res.ok;
+  } catch (e) {
+    if (e.code === "SESSION_EXPIRED") throw e;
+    console.error("mybiseo storage save error", e);
+    return false;
+  }
 }

@@ -1,7 +1,18 @@
 import "dotenv/config";
 import express from "express";
+import rateLimit from "express-rate-limit";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import pool, { initDb } from "./db.js";
+import {
+  authSecretsConfigured,
+  isValidUsername,
+  isValidPin,
+  registerAccount,
+  loginAccount,
+  issueToken,
+  authMiddleware,
+} from "./auth.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -11,6 +22,120 @@ const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
+
+/* ------------------------------------------------------------------ */
+/* Auth — username + 4-digit PIN. Usernames are NOT unique on their     */
+/* own (duplicate nicknames are allowed); the (username, PIN) combo is  */
+/* the real account identifier and is what's enforced unique in the DB. */
+/* ------------------------------------------------------------------ */
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "너무 많은 시도가 있었어요. 잠시 후 다시 시도해주세요." },
+});
+
+app.post("/api/auth/register", authLimiter, async (req, res) => {
+  if (!authSecretsConfigured()) {
+    console.error("JWT_SECRET or PIN_LOOKUP_SECRET is not set");
+    return res.status(500).json({ error: "서버 설정이 아직 완료되지 않았어요." });
+  }
+  const { username, pin } = req.body || {};
+  if (!isValidUsername(username)) {
+    return res.status(400).json({ error: "사용자 이름을 입력해주세요." });
+  }
+  if (!isValidPin(pin)) {
+    return res.status(400).json({ error: "4자리 숫자를 입력해주세요." });
+  }
+  try {
+    const account = await registerAccount(username, pin);
+    const token = issueToken(account);
+    res.json({ token, username: account.username });
+  } catch (e) {
+    if (e.code === "DUPLICATE_COMBO") {
+      return res.status(409).json({ error: "이미 사용 중인 조합이에요, 다른 숫자를 선택해주세요." });
+    }
+    console.error("register error", e);
+    res.status(500).json({ error: "회원가입 중 문제가 생겼어요." });
+  }
+});
+
+app.post("/api/auth/login", authLimiter, async (req, res) => {
+  if (!authSecretsConfigured()) {
+    console.error("JWT_SECRET or PIN_LOOKUP_SECRET is not set");
+    return res.status(500).json({ error: "서버 설정이 아직 완료되지 않았어요." });
+  }
+  const { username, pin } = req.body || {};
+  if (!isValidUsername(username) || !isValidPin(pin)) {
+    return res.status(400).json({ error: "사용자 이름과 4자리 숫자를 입력해주세요." });
+  }
+  try {
+    const account = await loginAccount(username, pin);
+    if (!account) {
+      return res.status(401).json({ error: "사용자 이름 또는 숫자가 올바르지 않아요." });
+    }
+    const token = issueToken(account);
+    res.json({ token, username: account.username });
+  } catch (e) {
+    console.error("login error", e);
+    res.status(500).json({ error: "로그인 중 문제가 생겼어요." });
+  }
+});
+
+/* ------------------------------------------------------------------ */
+/* Per-account app data — one row per account holding the same shape    */
+/* the client used to keep in localStorage (categories/scheduleItems/   */
+/* habits/habitLogs as `data`, chat history as `messages`).             */
+/* ------------------------------------------------------------------ */
+app.get("/api/data", authMiddleware, async (req, res) => {
+  try {
+    const result = await pool.query(`SELECT data, messages FROM app_data WHERE account_id = $1`, [
+      req.accountId,
+    ]);
+    const row = result.rows[0];
+    res.json({ data: row ? row.data : null, messages: row ? row.messages : null });
+  } catch (e) {
+    console.error("load app_data error", e);
+    res.status(500).json({ error: "데이터를 불러오지 못했어요." });
+  }
+});
+
+app.put("/api/data", authMiddleware, async (req, res) => {
+  const { data } = req.body || {};
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return res.status(400).json({ error: "data가 필요해요." });
+  }
+  try {
+    await pool.query(
+      `INSERT INTO app_data (account_id, data) VALUES ($1, $2)
+       ON CONFLICT (account_id) DO UPDATE SET data = $2, updated_at = now()`,
+      [req.accountId, data]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("save app_data error", e);
+    res.status(500).json({ error: "데이터를 저장하지 못했어요." });
+  }
+});
+
+app.put("/api/messages", authMiddleware, async (req, res) => {
+  const { messages } = req.body || {};
+  if (!Array.isArray(messages)) {
+    return res.status(400).json({ error: "messages가 필요해요." });
+  }
+  try {
+    await pool.query(
+      `INSERT INTO app_data (account_id, messages) VALUES ($1, $2)
+       ON CONFLICT (account_id) DO UPDATE SET messages = $2, updated_at = now()`,
+      [req.accountId, JSON.stringify(messages)]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("save app_data messages error", e);
+    res.status(500).json({ error: "대화 내용을 저장하지 못했어요." });
+  }
+});
 
 /* ------------------------------------------------------------------ */
 /* JSON schema for the assistant's structured reply. Passed as          */
@@ -57,12 +182,13 @@ const REPLY_SCHEMA = {
 
 /* ------------------------------------------------------------------ */
 /* /api/chat — proxies the assistant conversation to the Gemini         */
-/* generateContent API. The API key stays on the server; the client     */
-/* only ever sends the system prompt + message history it already      */
-/* builds, and gets back the same { content: [{type:"text", text}] }    */
-/* envelope it always has — only the backend swapped, not the contract. */
+/* generateContent API. Requires login (authMiddleware) so the free-    */
+/* tier Gemini key can't be hit anonymously. The API key stays on the   */
+/* server; the client only ever sends the system prompt + message       */
+/* history it already builds, and gets back the same                    */
+/* { content: [{type:"text", text}] } envelope it always has.           */
 /* ------------------------------------------------------------------ */
-app.post("/api/chat", async (req, res) => {
+app.post("/api/chat", authMiddleware, async (req, res) => {
   if (!GEMINI_API_KEY) {
     console.error("GEMINI_API_KEY is not set");
     return res.status(500).json({ error: "서버에 GEMINI_API_KEY가 설정되어 있지 않아요." });
@@ -168,6 +294,10 @@ app.get("*", (req, res, next) => {
     if (err) next();
   });
 });
+
+initDb()
+  .then(() => console.log("DB ready (accounts/app_data tables ensured)"))
+  .catch((e) => console.error("DB init failed — auth/data routes will fail until DATABASE_URL is reachable", e));
 
 app.listen(PORT, () => {
   console.log(`My.BㅣSㅓ server listening on http://localhost:${PORT}`);

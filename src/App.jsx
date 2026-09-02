@@ -2,10 +2,11 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Home, Calendar as CalIcon, CheckSquare, Sparkles, MessageCircle,
   ChevronLeft, ChevronRight, Plus, X, Check, Send, Circle, Clock,
-  Link as LinkIcon, Settings, Trash2, Save, Download, Upload,
+  Link as LinkIcon, Settings, Trash2, Save, Download, Upload, LogOut,
 } from "lucide-react";
 import { loadData, saveData, loadMessages, saveMessages } from "./lib/storage.js";
 import { sendChat } from "./lib/api.js";
+import { getToken, getUsername, clearSession, register, login } from "./lib/auth.js";
 
 /* ------------------------------------------------------------------ */
 /* Design tokens                                                       */
@@ -161,6 +162,8 @@ function Home_({
   loadedFromStorage,
   data,
   setData,
+  username,
+  onLogout,
 }) {
   const urgent = scheduleItems.filter((i) => i.status === "임박" && !i.completed);
   const [showBackup, setShowBackup] = useState(false);
@@ -187,9 +190,17 @@ function Home_({
     <div className="flex flex-col h-full px-6 pt-10 pb-6">
       <div className="flex items-center justify-between mb-1">
         <span className="text-sm" style={{ color: C.inkMuted }}>
-          오늘도 잘하고 있어요
+          {username ? `${username}님, ` : ""}오늘도 잘하고 있어요
         </span>
         <div className="flex items-center gap-1.5">
+          <button
+            onClick={onLogout}
+            className="w-8 h-8 flex items-center justify-center rounded-full shrink-0"
+            style={{ background: C.bg }}
+            aria-label="로그아웃"
+          >
+            <LogOut size={14} color={C.inkMuted} />
+          </button>
           <button
             onClick={() => setShowBackup(true)}
             className="w-8 h-8 flex items-center justify-center rounded-full shrink-0"
@@ -2257,7 +2268,117 @@ function BottomNav({ screen, setScreen }) {
   );
 }
 
-export default function App() {
+/* ------------------------------------------------------------------ */
+/* Auth (username + 4-digit PIN)                                       */
+/* ------------------------------------------------------------------ */
+function AuthScreen({ notice, onAuthed }) {
+  const [mode, setMode] = useState("login"); // "login" | "register"
+  const [username, setUsername] = useState("");
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    setError("");
+    if (!username.trim()) {
+      setError("사용자 이름을 입력해주세요.");
+      return;
+    }
+    if (!/^\d{4}$/.test(pin)) {
+      setError("4자리 숫자를 입력해주세요.");
+      return;
+    }
+    setBusy(true);
+    try {
+      if (mode === "login") {
+        await login(username.trim(), pin);
+      } else {
+        await register(username.trim(), pin);
+      }
+      onAuthed();
+    } catch (e) {
+      setError(e.message || "문제가 발생했어요.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col h-full items-center justify-center px-8">
+      <h1 className="text-3xl font-bold mb-1 tracking-tight" style={{ color: C.ink }}>
+        My.B<span style={{ color: C.lavenderDeep }}>l</span>S
+        <span style={{ color: C.lavenderDeep }}>ㅓ</span>
+      </h1>
+      <div className="text-sm mb-8" style={{ color: C.inkMuted }}>
+        {mode === "login" ? "로그인하고 이어서 사용해요" : "사용자 이름 + 4자리 숫자로 계정을 만들어요"}
+      </div>
+
+      {notice && (
+        <div
+          className="w-full max-w-xs text-[12px] mb-4 px-3 py-2 rounded-xl"
+          style={{ background: "#F6E4E4", color: "#7A2E2E" }}
+        >
+          {notice}
+        </div>
+      )}
+
+      <div className="w-full max-w-xs">
+        <Field label="사용자 이름">
+          <input
+            style={inputStyle}
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            placeholder="닉네임"
+            maxLength={20}
+            onKeyDown={(e) => e.key === "Enter" && submit()}
+          />
+        </Field>
+        <Field label="4자리 숫자">
+          <input
+            style={inputStyle}
+            value={pin}
+            onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+            placeholder="0000"
+            inputMode="numeric"
+            type="password"
+            maxLength={4}
+            onKeyDown={(e) => e.key === "Enter" && submit()}
+          />
+        </Field>
+        {error && (
+          <div className="text-[12px] mb-3" style={{ color: "#B25858" }}>
+            {error}
+          </div>
+        )}
+        <button
+          onClick={submit}
+          disabled={busy}
+          className="w-full py-3 rounded-xl text-sm font-semibold"
+          style={{ background: C.lavenderDeep, color: "#fff", opacity: busy ? 0.7 : 1 }}
+        >
+          {busy ? "처리 중…" : mode === "login" ? "로그인" : "회원가입"}
+        </button>
+        <button
+          onClick={() => {
+            setMode((m) => (m === "login" ? "register" : "login"));
+            setError("");
+          }}
+          className="w-full py-3 text-xs mt-1"
+          style={{ color: C.lavenderDeep }}
+        >
+          {mode === "login" ? "계정이 없으신가요? 회원가입" : "이미 계정이 있으신가요? 로그인"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* MainApp — everything that needs a logged-in account. Mounting fresh  */
+/* on every login means its state (data/messages/etc.) never carries   */
+/* over between accounts, even when they share a username.             */
+/* ------------------------------------------------------------------ */
+function MainApp({ onLoggedOut }) {
   const [screen, setScreen] = useState("home");
   const [data, setData] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -2266,27 +2387,36 @@ export default function App() {
   const [lastSaved, setLastSaved] = useState(null);
   const [loadedFromStorage, setLoadedFromStorage] = useState(false);
   const skipNextSave = useRef(true);
+  const username = getUsername();
+
+  const handleExpired = useCallback(() => {
+    onLoggedOut("세션이 만료됐어요. 다시 로그인해주세요.");
+  }, [onLoggedOut]);
 
   useEffect(() => {
     (async () => {
-      const d = await loadData();
-      const m = await loadMessages();
-      const hasRealData = d && d !== "LOAD_FAILED";
-      setData(
-        hasRealData
-          ? d
-          : {
-              categories: DEFAULT_CATEGORIES,
-              scheduleItems: [],
-              habits: [],
-              habitLogs: [],
-            }
-      );
-      setLoadedFromStorage(!!hasRealData);
-      setMessages(m || []);
-      setReady(true);
+      try {
+        const d = await loadData();
+        const m = await loadMessages();
+        const hasRealData = d && d !== "LOAD_FAILED";
+        setData(
+          hasRealData
+            ? d
+            : {
+                categories: DEFAULT_CATEGORIES,
+                scheduleItems: [],
+                habits: [],
+                habitLogs: [],
+              }
+        );
+        setLoadedFromStorage(!!hasRealData);
+        setMessages(m || []);
+        setReady(true);
+      } catch (e) {
+        if (e.code === "SESSION_EXPIRED") handleExpired();
+      }
     })();
-  }, []);
+  }, [handleExpired]);
 
   // auto-escalate to 임박 within 2 days
   useEffect(() => {
@@ -2312,28 +2442,40 @@ export default function App() {
       skipNextSave.current = false;
       return;
     }
-    saveData(data).then(() => setLastSaved(new Date()));
-  }, [data, ready]);
+    saveData(data)
+      .then(() => setLastSaved(new Date()))
+      .catch((e) => {
+        if (e.code === "SESSION_EXPIRED") handleExpired();
+      });
+  }, [data, ready, handleExpired]);
 
   useEffect(() => {
-    if (ready) saveMessages(messages);
-  }, [messages, ready]);
+    if (!ready) return;
+    saveMessages(messages).catch((e) => {
+      if (e.code === "SESSION_EXPIRED") handleExpired();
+    });
+  }, [messages, ready, handleExpired]);
 
   const manualSave = async () => {
     setSaveStatus("saving");
-    await saveData(data);
-    await saveMessages(messages);
-    setLastSaved(new Date());
-    setSaveStatus("saved");
-    setTimeout(() => setSaveStatus(""), 1500);
+    try {
+      await saveData(data);
+      await saveMessages(messages);
+      setLastSaved(new Date());
+      setSaveStatus("saved");
+      setTimeout(() => setSaveStatus(""), 1500);
+    } catch (e) {
+      if (e.code === "SESSION_EXPIRED") {
+        handleExpired();
+        return;
+      }
+      setSaveStatus("");
+    }
   };
 
   if (!ready || !data) {
     return (
-      <div
-        className="w-full h-full flex items-center justify-center"
-        style={{ background: C.bg }}
-      >
+      <div className="w-full h-full flex items-center justify-center">
         <div className="text-sm" style={{ color: C.inkMuted }}>
           불러오는 중…
         </div>
@@ -2342,17 +2484,7 @@ export default function App() {
   }
 
   return (
-    <div
-      className="w-full mx-auto flex flex-col"
-      style={{
-        maxWidth: 420,
-        height: "100dvh",
-        overflow: "hidden",
-        background: C.bg,
-        fontFamily:
-          "'Apple SD Gothic Neo', 'Malgun Gothic', system-ui, -apple-system, sans-serif",
-      }}
-    >
+    <>
       <div className="flex-1 overflow-hidden relative">
         {screen === "home" && (
           <Home_
@@ -2364,6 +2496,8 @@ export default function App() {
             loadedFromStorage={loadedFromStorage}
             data={data}
             setData={setData}
+            username={username}
+            onLogout={() => onLoggedOut("")}
           />
         )}
         {screen === "calendar" && <CalendarScreen data={data} setData={setData} />}
@@ -2379,6 +2513,48 @@ export default function App() {
         )}
       </div>
       <BottomNav screen={screen} setScreen={setScreen} />
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* App shell — gates the whole app behind login. The mobile shell       */
+/* (max-width, dvh height, font) lives here so both the auth screen     */
+/* and the logged-in app render inside the same frame.                 */
+/* ------------------------------------------------------------------ */
+export default function App() {
+  const [token, setToken] = useState(() => getToken());
+  const [notice, setNotice] = useState("");
+
+  const handleLoggedOut = (msg) => {
+    clearSession();
+    setToken(null);
+    setNotice(msg || "");
+  };
+
+  return (
+    <div
+      className="w-full mx-auto flex flex-col"
+      style={{
+        maxWidth: 420,
+        height: "100dvh",
+        overflow: "hidden",
+        background: C.bg,
+        fontFamily:
+          "'Apple SD Gothic Neo', 'Malgun Gothic', system-ui, -apple-system, sans-serif",
+      }}
+    >
+      {token ? (
+        <MainApp key={token} onLoggedOut={handleLoggedOut} />
+      ) : (
+        <AuthScreen
+          notice={notice}
+          onAuthed={() => {
+            setNotice("");
+            setToken(getToken());
+          }}
+        />
+      )}
     </div>
   );
 }
