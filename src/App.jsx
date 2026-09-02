@@ -1894,33 +1894,67 @@ function makeAutoHabit(name, goal, existingCount) {
   };
 }
 
-// Resolves whatever categoryId the model returned against the user's
-// actual categories: exact id match, then exact name match (the model
-// sometimes echoes the category's name instead of its id), then a
-// loose substring match, and only then falls back — to the first
-// category in the list, not a hardcoded "todo" that may not exist or
-// may no longer be what the user considers their default.
-function resolveCategoryId(categories, rawCategoryId, replyText) {
-  if (!categories.length) return rawCategoryId || "";
-  if (categories.some((c) => c.id === rawCategoryId)) return rawCategoryId;
-  const byName = categories.find((c) => c.name === rawCategoryId);
-  if (byName) return byName.id;
-  if (rawCategoryId) {
-    const byLooseName = categories.find(
-      (c) => c.name.includes(rawCategoryId) || rawCategoryId.includes(c.name)
-    );
-    if (byLooseName) return byLooseName.id;
+// The model's categoryId is never trusted at face value: it only counts
+// when it's an exact match against a real category id (i.e. the user
+// named the category directly and the model echoed its real id back).
+// Anything else — empty, a made-up id, a category name instead of an
+// id — is treated as "unresolved" and left for the user to pick from
+// buttons in the chat UI instead of guessing.
+function categoryExactMatch(categories, rawCategoryId) {
+  return categories.some((c) => c.id === rawCategoryId);
+}
+
+// "9/1", "9.1", "9월 1일" 같은 표현에서 월/일을 뽑아 올해 기준 YYYY-MM-DD로
+// 바꾼다. 모델이 startDate를 비워서 줬을 때, 비서의 reply 문장에서 날짜를
+// 복구하기 위한 최후 수단.
+function extractDatesFromReply(replyText) {
+  if (!replyText) return [];
+  const re = /(\d{1,2})\s*[.\/월]\s*(\d{1,2})\s*일?/g;
+  const matches = [...replyText.matchAll(re)];
+  const year = todayStr().slice(0, 4);
+  return matches.map(
+    (m) => `${year}-${String(m[1]).padStart(2, "0")}-${String(m[2]).padStart(2, "0")}`
+  );
+}
+
+function buildScheduleCandidate(a, replyText) {
+  const title = (a.title || "").trim();
+  let startDate = a.startDate;
+  let endDate = a.endDate;
+  if (!startDate) {
+    const extracted = extractDatesFromReply(replyText);
+    startDate = extracted[0] || todayStr();
+    endDate = a.endDate || extracted[1] || extracted[0] || todayStr();
+  } else {
+    endDate = endDate || startDate;
   }
-  // categoryId itself didn't match anything — before giving up, check
-  // whether the assistant's own reply text names a real category (e.g.
-  // "취업준비 카테고리에 등록했어요"). The model sometimes gets the
-  // categoryId field wrong/empty while still describing the right
-  // category correctly in the human-readable reply.
-  if (replyText) {
-    const byReplyMention = categories.find((c) => replyText.includes(c.name));
-    if (byReplyMention) return byReplyMention.id;
+  return { title, startDate, endDate };
+}
+
+function isDuplicateSchedule(scheduleItems, { title, categoryId, startDate, endDate }) {
+  return scheduleItems.some(
+    (it) =>
+      it.title === title &&
+      it.categoryId === categoryId &&
+      it.startDate === startDate &&
+      it.endDate === endDate
+  );
+}
+
+// add_schedule action들 중 categoryId가 실제 카테고리와 정확히 일치하지
+// 않는 것들을 모아서, AI를 다시 거치지 않고 채팅 버튼으로 바로 처리할 수
+// 있게 한다 (AssistantScreen이 이 목록을 메시지에 붙여 렌더링한다).
+function derivePendingSchedules(actions, categories, replyText) {
+  if (!Array.isArray(actions)) return [];
+  const pending = [];
+  for (const a of actions) {
+    if (a.type !== "add_schedule") continue;
+    if (categoryExactMatch(categories, a.categoryId)) continue;
+    const candidate = buildScheduleCandidate(a, replyText);
+    if (!candidate.title) continue;
+    pending.push({ id: uid(), ...candidate });
   }
-  return categories[0].id;
+  return pending;
 }
 
 function applyActions(actions, setData, replyText) {
@@ -1934,12 +1968,17 @@ function applyActions(actions, setData, replyText) {
     };
     for (const a of actions) {
       if (a.type === "add_schedule") {
+        // categoryId가 정확히 일치하지 않으면 여기서 바로 저장하지 않는다
+        // — derivePendingSchedules가 이미 같은 action을 pending으로 잡아
+        // 채팅 버튼으로 넘겼으므로, 사용자가 카테고리를 고른 뒤 커밋된다.
+        if (!categoryExactMatch(next.categories, a.categoryId)) continue;
+        const candidate = buildScheduleCandidate(a, replyText);
+        if (!candidate.title) continue;
+        const item = { ...candidate, categoryId: a.categoryId };
+        if (isDuplicateSchedule(next.scheduleItems, item)) continue;
         next.scheduleItems.push({
           id: uid(),
-          title: a.title,
-          categoryId: resolveCategoryId(next.categories, a.categoryId, replyText),
-          startDate: a.startDate || todayStr(),
-          endDate: a.endDate || a.startDate || todayStr(),
+          ...item,
           status: "준비중",
           completed: false,
         });
@@ -2006,6 +2045,7 @@ function AssistantScreen({ data, setData, messages, setMessages }) {
   const bottomRef = useRef(null);
   const lastMsg = messages[messages.length - 1];
   const showDateChoice = !busy && lastMsg?.role === "assistant" && lastMsg?.askDateChoice;
+  const pendingSchedules = !busy && lastMsg?.role === "assistant" ? lastMsg?.pendingSchedules || [] : [];
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -2050,10 +2090,24 @@ function AssistantScreen({ data, setData, messages, setMessages }) {
           askDateChoice: false,
         };
       }
+      const newPendingSchedules = derivePendingSchedules(parsed.actions, data.categories, parsed.reply);
       applyActions(parsed.actions, setData, parsed.reply);
+      // 카테고리를 확정 못 한 일정이 있으면, 모델이 이미 "등록했어요" 같은
+      // 문구를 reply에 넣었더라도 그대로 보여주지 않는다 — 실제로는 아직
+      // 저장되지 않았으므로, 대신 카테고리를 되묻는 문구로 교체한다.
+      const displayReply =
+        newPendingSchedules.length > 0
+          ? newPendingSchedules.map((p) => `${p.title}은 어떤 카테고리에 저장할까요?`).join("\n")
+          : parsed.reply;
       setMessages((m) => [
         ...m,
-        { id: uid(), role: "assistant", text: parsed.reply, askDateChoice: parsed.askDateChoice },
+        {
+          id: uid(),
+          role: "assistant",
+          text: displayReply,
+          askDateChoice: parsed.askDateChoice,
+          pendingSchedules: newPendingSchedules,
+        },
       ]);
     } catch (e) {
       console.error("mybiseo assistant request error", e);
@@ -2065,6 +2119,45 @@ function AssistantScreen({ data, setData, messages, setMessages }) {
     } finally {
       setBusy(false);
     }
+  };
+
+  // 사용자가 카테고리 버튼을 눌렀을 때 — AI를 다시 거치지 않고, 그 자리에서
+  // 바로 일정으로 커밋한다. askDateChoice의 오늘/어제 버튼과 달리 이건
+  // send()를 부르지 않는다: 카테고리 선택은 이미 로컬에 있는 정보만으로
+  // 결정할 수 있는 일이라 AI에게 다시 물을 이유가 없다.
+  const commitScheduleCategory = (pending, categoryId) => {
+    setData((d) => {
+      const item = {
+        title: pending.title,
+        categoryId,
+        startDate: pending.startDate,
+        endDate: pending.endDate,
+      };
+      if (isDuplicateSchedule(d.scheduleItems, item)) return d;
+      return {
+        ...d,
+        scheduleItems: [
+          ...d.scheduleItems,
+          { id: uid(), ...item, status: "준비중", completed: false },
+        ],
+      };
+    });
+    const category = data.categories.find((c) => c.id === categoryId);
+    setMessages((m) => {
+      const withoutResolved = m.map((msg) =>
+        msg.id === lastMsg?.id
+          ? { ...msg, pendingSchedules: (msg.pendingSchedules || []).filter((p) => p.id !== pending.id) }
+          : msg
+      );
+      return [
+        ...withoutResolved,
+        {
+          id: uid(),
+          role: "assistant",
+          text: `"${pending.title}"을(를) ${category?.name || "선택한 카테고리"}에 저장했어요.`,
+        },
+      ];
+    });
   };
 
   return (
@@ -2188,6 +2281,24 @@ function AssistantScreen({ data, setData, messages, setMessages }) {
             )}
           </div>
         )}
+        {pendingSchedules.map((p) => (
+          <div key={p.id} className="flex flex-wrap gap-2">
+            {data.categories.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => commitScheduleCategory(p, c.id)}
+                className="text-xs px-3 py-2 rounded-2xl flex items-center gap-1.5"
+                style={{ background: C.card, color: C.ink, border: `1px solid ${C.border}` }}
+              >
+                <span
+                  className="w-2 h-2 rounded-full shrink-0"
+                  style={{ background: c.color }}
+                />
+                {c.name}
+              </button>
+            ))}
+          </div>
+        ))}
         {busy && (
           <div className="flex justify-start">
             <div
@@ -2203,16 +2314,18 @@ function AssistantScreen({ data, setData, messages, setMessages }) {
 
       <div className="px-4 py-3 flex items-center gap-2" style={{ borderTop: `1px solid ${C.border}` }}>
         <input
-          style={{ ...inputStyle, flex: 1 }}
+          style={{ ...inputStyle, flex: 1, opacity: busy ? 0.6 : 1 }}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && send(input)}
           placeholder="무엇을 도와드릴까요?"
+          disabled={busy}
         />
         <button
           onClick={() => send(input)}
+          disabled={busy}
           className="w-10 h-10 rounded-full flex items-center justify-center shrink-0"
-          style={{ background: C.lavenderDeep }}
+          style={{ background: C.lavenderDeep, opacity: busy ? 0.6 : 1 }}
         >
           <Send size={16} color="#fff" />
         </button>
