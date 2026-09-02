@@ -1,8 +1,3 @@
-databases:
-  - name: my-biseo-db
-    plan: free
-    region: singapore
-
 services:
   - type: web
     name: my-biseo
@@ -19,10 +14,8 @@ services:
         sync: false
       - key: GEMINI_MODEL
         value: gemini-2.5-flash
-      - key: DATABASE_URL
-        fromDatabase:
-          name: my-biseo-db
-          property: connectionString
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
       - key: JWT_SECRET
         generateValue: true
       - key: PIN_LOOKUP_SECRET

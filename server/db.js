@@ -1,35 +1,42 @@
-import pg from "pg";
+import { initializeApp, cert } from "firebase-admin/app";
+import { getFirestore } from "firebase-admin/firestore";
 
-const { Pool } = pg;
-
-// Render's Postgres requires SSL on its external connection string; a
-// local dev database (localhost) doesn't speak SSL at all. Render's
-// internal connection string also accepts this permissive SSL config
-// without issue, so one branch covers every deployment shape we use.
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL?.includes("localhost") ? false : { rejectUnauthorized: false },
-});
-
-export async function initDb() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS accounts (
-      id SERIAL PRIMARY KEY,
-      username TEXT NOT NULL,
-      pin_hash TEXT NOT NULL,
-      pin_lookup TEXT NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      UNIQUE (username, pin_lookup)
-    );
-  `);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS app_data (
-      account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
-      data JSONB NOT NULL DEFAULT '{}'::jsonb,
-      messages JSONB NOT NULL DEFAULT '[]'::jsonb,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-    );
-  `);
+// FIREBASE_SERVICE_ACCOUNT_JSON holds the raw contents of the service
+// account key file downloaded from Firebase Console -> Project Settings
+// -> Service Accounts -> Generate new private key. Paste the whole JSON
+// as one env var value; JSON.parse handles the escaped "\n"s in
+// private_key correctly since that's how the file already encodes them.
+function loadServiceAccount() {
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    console.error("FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON", e);
+    return null;
+  }
 }
 
-export default pool;
+const serviceAccount = loadServiceAccount();
+let db = null;
+
+if (serviceAccount) {
+  const app = initializeApp({ credential: cert(serviceAccount) });
+  db = getFirestore(app);
+} else {
+  console.error("FIREBASE_SERVICE_ACCOUNT_JSON is not set — auth/data routes will fail until it is.");
+}
+
+export function firestoreReady() {
+  return Boolean(db);
+}
+
+// Firestore is schemaless — nothing to bootstrap (collections and their
+// documents are created on first write). Kept as a no-op async function
+// so index.js's startup flow doesn't need special-casing for the swap
+// from Postgres.
+export async function initDb() {
+  if (!db) throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON is not set or invalid");
+}
+
+export default db;

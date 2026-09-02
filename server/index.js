@@ -3,7 +3,8 @@ import express from "express";
 import rateLimit from "express-rate-limit";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import pool, { initDb } from "./db.js";
+import { FieldValue } from "firebase-admin/firestore";
+import db, { initDb } from "./db.js";
 import {
   authSecretsConfigured,
   isValidUsername,
@@ -84,19 +85,20 @@ app.post("/api/auth/login", authLimiter, async (req, res) => {
 });
 
 /* ------------------------------------------------------------------ */
-/* Per-account app data — one row per account holding the same shape    */
-/* the client used to keep in localStorage (categories/scheduleItems/   */
-/* habits/habitLogs as `data`, chat history as `messages`).             */
+/* Per-account app data — one Firestore doc per account (collection     */
+/* "appData", doc id = the account's key from auth.js) holding the same */
+/* shape the client used to keep in localStorage (categories/           */
+/* scheduleItems/habits/habitLogs as `data`, chat history as            */
+/* `messages`). set(..., {merge:true}) updates only the given field,    */
+/* mirroring the old INSERT ... ON CONFLICT DO UPDATE SET <col>.        */
 /* ------------------------------------------------------------------ */
 app.get("/api/data", authMiddleware, async (req, res) => {
   try {
-    const result = await pool.query(`SELECT data, messages FROM app_data WHERE account_id = $1`, [
-      req.accountId,
-    ]);
-    const row = result.rows[0];
-    res.json({ data: row ? row.data : null, messages: row ? row.messages : null });
+    const snap = await db.collection("appData").doc(req.accountId).get();
+    const row = snap.exists ? snap.data() : null;
+    res.json({ data: row?.data ?? null, messages: row?.messages ?? null });
   } catch (e) {
-    console.error("load app_data error", e);
+    console.error("load appData error", e);
     res.status(500).json({ error: "데이터를 불러오지 못했어요." });
   }
 });
@@ -107,14 +109,13 @@ app.put("/api/data", authMiddleware, async (req, res) => {
     return res.status(400).json({ error: "data가 필요해요." });
   }
   try {
-    await pool.query(
-      `INSERT INTO app_data (account_id, data) VALUES ($1, $2)
-       ON CONFLICT (account_id) DO UPDATE SET data = $2, updated_at = now()`,
-      [req.accountId, data]
-    );
+    await db
+      .collection("appData")
+      .doc(req.accountId)
+      .set({ data, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
     res.json({ ok: true });
   } catch (e) {
-    console.error("save app_data error", e);
+    console.error("save appData error", e);
     res.status(500).json({ error: "데이터를 저장하지 못했어요." });
   }
 });
@@ -125,14 +126,13 @@ app.put("/api/messages", authMiddleware, async (req, res) => {
     return res.status(400).json({ error: "messages가 필요해요." });
   }
   try {
-    await pool.query(
-      `INSERT INTO app_data (account_id, messages) VALUES ($1, $2)
-       ON CONFLICT (account_id) DO UPDATE SET messages = $2, updated_at = now()`,
-      [req.accountId, JSON.stringify(messages)]
-    );
+    await db
+      .collection("appData")
+      .doc(req.accountId)
+      .set({ messages, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
     res.json({ ok: true });
   } catch (e) {
-    console.error("save app_data messages error", e);
+    console.error("save appData messages error", e);
     res.status(500).json({ error: "대화 내용을 저장하지 못했어요." });
   }
 });
@@ -296,8 +296,13 @@ app.get("*", (req, res, next) => {
 });
 
 initDb()
-  .then(() => console.log("DB ready (accounts/app_data tables ensured)"))
-  .catch((e) => console.error("DB init failed — auth/data routes will fail until DATABASE_URL is reachable", e));
+  .then(() => console.log("Firestore ready"))
+  .catch((e) =>
+    console.error(
+      "Firestore init failed — auth/data routes will fail until FIREBASE_SERVICE_ACCOUNT_JSON is set correctly",
+      e
+    )
+  );
 
 app.listen(PORT, () => {
   console.log(`My.BㅣSㅓ server listening on http://localhost:${PORT}`);
