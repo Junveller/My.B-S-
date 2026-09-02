@@ -1983,9 +1983,10 @@ function AssistantScreen({ data, setData, messages, setMessages }) {
       setMessages((m) => [...m, { id: uid(), role: "assistant", text: parsed.reply }]);
     } catch (e) {
       console.error("mybiseo assistant request error", e);
+      const detail = e?.message ? ` (${e.message})` : "";
       setMessages((m) => [
         ...m,
-        { id: uid(), role: "assistant", text: "연결에 문제가 있었어요. 잠시 후 다시 시도해주세요." },
+        { id: uid(), role: "assistant", text: `연결에 문제가 있었어요${detail}. 잠시 후 다시 시도해주세요.` },
       ]);
     } finally {
       setBusy(false);

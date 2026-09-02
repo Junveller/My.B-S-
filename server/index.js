@@ -19,6 +19,11 @@ app.use(express.json({ limit: "1mb" }));
 /* prefill (unsupported / 400 on claude-sonnet-5 and newer) and no      */
 /* "please only output JSON" prompt-begging required.                   */
 /* ------------------------------------------------------------------ */
+// Flat (no anyOf-in-array-items — undocumented/untested combination for
+// this API) shape: every action field any type might use, all optional
+// except "type". applyActions() on the client already branches on
+// a.type and only reads the fields relevant to that branch, so unused
+// fields being absent (or model-supplied null) is harmless.
 const REPLY_SCHEMA = {
   type: "object",
   properties: {
@@ -26,60 +31,26 @@ const REPLY_SCHEMA = {
     actions: {
       type: "array",
       items: {
-        anyOf: [
-          {
-            type: "object",
-            properties: {
-              type: { const: "add_schedule" },
-              title: { type: "string" },
-              categoryId: { type: "string" },
-              startDate: { type: "string" },
-              endDate: { type: "string" },
-            },
-            required: ["type", "title", "categoryId", "startDate", "endDate"],
-            additionalProperties: false,
+        type: "object",
+        properties: {
+          type: {
+            type: "string",
+            enum: ["add_schedule", "update_status", "complete_schedule", "log_habit", "add_habit"],
           },
-          {
-            type: "object",
-            properties: {
-              type: { const: "update_status" },
-              titleMatch: { type: "string" },
-              status: { type: "string", enum: ["준비중", "곧 시작", "임박", "종료"] },
-            },
-            required: ["type", "titleMatch", "status"],
-            additionalProperties: false,
-          },
-          {
-            type: "object",
-            properties: {
-              type: { const: "complete_schedule" },
-              titleMatch: { type: "string" },
-            },
-            required: ["type", "titleMatch"],
-            additionalProperties: false,
-          },
-          {
-            type: "object",
-            properties: {
-              type: { const: "log_habit" },
-              habitNameMatch: { type: "string" },
-              percent: { type: "integer" },
-              note: { type: "string" },
-            },
-            required: ["type", "habitNameMatch", "percent", "note"],
-            additionalProperties: false,
-          },
-          {
-            type: "object",
-            properties: {
-              type: { const: "add_habit" },
-              name: { type: "string" },
-              goal: { type: "string" },
-            },
-            required: ["type", "name", "goal"],
-            additionalProperties: false,
-          },
-        ],
+          title: { type: "string" },
+          categoryId: { type: "string" },
+          startDate: { type: "string" },
+          endDate: { type: "string" },
+          titleMatch: { type: "string" },
+          status: { type: "string", enum: ["준비중", "곧 시작", "임박", "종료"] },
+          habitNameMatch: { type: "string" },
+          percent: { type: "integer" },
+          note: { type: "string" },
+          name: { type: "string" },
+          goal: { type: "string" },
+        },
+        required: ["type"],
+        additionalProperties: false,
       },
     },
   },
