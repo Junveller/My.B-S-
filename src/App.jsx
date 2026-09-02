@@ -52,7 +52,15 @@ const uid = () => Math.random().toString(36).slice(2, 10);
 // midnight but still the previous day in UTC.
 const fmt = (d) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-const todayStr = () => fmt(new Date());
+// "오늘"은 기기/브라우저의 시간대 설정과 무관하게 항상 한국(Asia/Seoul) 기준
+// 달력 날짜여야 한다 — en-CA 로케일은 YYYY-MM-DD 포맷을 그대로 내어준다.
+const KST_TODAY_FORMATTER = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Seoul",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+const todayStr = () => KST_TODAY_FORMATTER.format(new Date());
 const addDays = (dateStr, n) => {
   const d = new Date(dateStr + "T00:00:00");
   d.setDate(d.getDate() + n);
@@ -368,8 +376,8 @@ function layoutWeek(weekDateStrs, items) {
 
 function CalendarScreen({ data, setData }) {
   const [cursor, setCursor] = useState(() => {
-    const t = new Date();
-    return { y: t.getFullYear(), m: t.getMonth() };
+    const [y, m] = todayStr().split("-").map(Number);
+    return { y, m: m - 1 };
   });
   const [picker, setPicker] = useState(false);
   const [selectedDay, setSelectedDay] = useState(null);
@@ -1892,7 +1900,7 @@ function makeAutoHabit(name, goal, existingCount) {
 // loose substring match, and only then falls back — to the first
 // category in the list, not a hardcoded "todo" that may not exist or
 // may no longer be what the user considers their default.
-function resolveCategoryId(categories, rawCategoryId) {
+function resolveCategoryId(categories, rawCategoryId, replyText) {
   if (!categories.length) return rawCategoryId || "";
   if (categories.some((c) => c.id === rawCategoryId)) return rawCategoryId;
   const byName = categories.find((c) => c.name === rawCategoryId);
@@ -1903,10 +1911,19 @@ function resolveCategoryId(categories, rawCategoryId) {
     );
     if (byLooseName) return byLooseName.id;
   }
+  // categoryId itself didn't match anything — before giving up, check
+  // whether the assistant's own reply text names a real category (e.g.
+  // "취업준비 카테고리에 등록했어요"). The model sometimes gets the
+  // categoryId field wrong/empty while still describing the right
+  // category correctly in the human-readable reply.
+  if (replyText) {
+    const byReplyMention = categories.find((c) => replyText.includes(c.name));
+    if (byReplyMention) return byReplyMention.id;
+  }
   return categories[0].id;
 }
 
-function applyActions(actions, setData) {
+function applyActions(actions, setData, replyText) {
   if (!Array.isArray(actions)) return;
   setData((d) => {
     let next = {
@@ -1920,7 +1937,7 @@ function applyActions(actions, setData) {
         next.scheduleItems.push({
           id: uid(),
           title: a.title,
-          categoryId: resolveCategoryId(next.categories, a.categoryId),
+          categoryId: resolveCategoryId(next.categories, a.categoryId, replyText),
           startDate: a.startDate || todayStr(),
           endDate: a.endDate || a.startDate || todayStr(),
           status: "준비중",
@@ -2033,7 +2050,7 @@ function AssistantScreen({ data, setData, messages, setMessages }) {
           askDateChoice: false,
         };
       }
-      applyActions(parsed.actions, setData);
+      applyActions(parsed.actions, setData, parsed.reply);
       setMessages((m) => [
         ...m,
         { id: uid(), role: "assistant", text: parsed.reply, askDateChoice: parsed.askDateChoice },
