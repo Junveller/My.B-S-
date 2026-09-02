@@ -1939,6 +1939,7 @@ function applyActions(actions, setData) {
 function AssistantScreen({ data, setData, messages, setMessages }) {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
   const bottomRef = useRef(null);
 
   useEffect(() => {
@@ -1993,11 +1994,47 @@ function AssistantScreen({ data, setData, messages, setMessages }) {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="px-5 pt-8 pb-3">
+      <div className="px-5 pt-8 pb-3 flex items-center justify-between">
         <h2 className="text-xl font-bold" style={{ color: C.ink }}>
           비서
         </h2>
+        {messages.length > 0 && (
+          <button
+            onClick={() => setShowResetConfirm(true)}
+            className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-full"
+            style={{ background: C.bg, color: C.inkMuted, border: `1px solid ${C.border}` }}
+          >
+            <Trash2 size={12} /> 대화 초기화
+          </button>
+        )}
       </div>
+
+      {showResetConfirm && (
+        <Modal onClose={() => setShowResetConfirm(false)} title="대화 초기화">
+          <div className="text-sm mb-4" style={{ color: C.ink }}>
+            지금까지 비서와 나눈 대화 내용을 모두 지울까요? 이미 반영된 일정/습관 데이터는 그대로 남아요.
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setShowResetConfirm(false)}
+              className="flex-1 py-3 rounded-xl text-sm font-semibold"
+              style={{ background: C.bg, color: C.ink, border: `1px solid ${C.border}` }}
+            >
+              취소
+            </button>
+            <button
+              onClick={() => {
+                setMessages([]);
+                setShowResetConfirm(false);
+              }}
+              className="flex-1 py-3 rounded-xl text-sm font-semibold"
+              style={{ background: "#B25858", color: "#fff" }}
+            >
+              초기화
+            </button>
+          </div>
+        </Modal>
+      )}
 
       <div className="flex-1 overflow-y-auto px-5 space-y-3">
         {messages.length === 0 && (
