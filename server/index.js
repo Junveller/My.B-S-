@@ -45,12 +45,14 @@ const REPLY_SCHEMA = {
           note: { type: "STRING" },
           name: { type: "STRING" },
           goal: { type: "STRING" },
+          date: { type: "STRING" },
         },
         required: ["type"],
       },
     },
+    askDateChoice: { type: "BOOLEAN" },
   },
-  required: ["reply", "actions"],
+  required: ["reply", "actions", "askDateChoice"],
 };
 
 /* ------------------------------------------------------------------ */

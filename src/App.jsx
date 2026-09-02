@@ -1800,25 +1800,32 @@ function buildSystemPrompt(data) {
 스키마:
 {
   "reply": "사용자에게 보여줄 다정하고 간결한 한국어 답변 (1~2문장)",
-  "actions": [ ...아래 타입 중 0개 이상... ]
+  "actions": [ ...아래 타입 중 0개 이상... ],
+  "askDateChoice": "습관 기록 날짜를 되물을 때만 true, 그 외에는 항상 false"
 }
 
 action 타입:
 1) {"type":"add_schedule","title":"...","categoryId":"아래 카테고리 목록의 id 중 하나","startDate":"YYYY-MM-DD","endDate":"YYYY-MM-DD"}
 2) {"type":"update_status","titleMatch":"기존 항목 제목에 포함된 텍스트","status":"준비중|곧 시작|임박|종료"}
 3) {"type":"complete_schedule","titleMatch":"기존 항목 제목에 포함된 텍스트"}
-4) {"type":"log_habit","habitNameMatch":"습관 이름(없으면 새로 만들 이름)","percent":0-100,"note":"짧은 메모"}
+4) {"type":"log_habit","habitNameMatch":"습관 이름(없으면 새로 만들 이름)","percent":0-100,"note":"짧은 메모","date":"YYYY-MM-DD (선택, 없으면 오늘 날짜로 기록)"}
 5) {"type":"add_habit","name":"...","goal":"예: 하루 10분 (선택, 없으면 빈 문자열)"}
 
 습관 규칙:
 - "현재 습관 목록"에 없는 습관을 사용자가 언급하면서 하는 중/기록하고 싶다고 하면, 먼저 add_habit으로 그 습관을 새로 만들고, 같은 응답의 actions 배열에 이어서 log_habit도 함께 넣어(habitNameMatch는 add_habit에서 쓴 name과 동일하게). 단순히 "습관을 시작하고 싶다/만들고 싶다"고만 하고 아직 실행 기록이 없으면 add_habit만 넣어.
 - 습관 기록 요청(예: "오늘 8분 독서했어", "요가 30분 했어", "오늘 운동 다녀왔어")은 목표 대비 퍼센트를 계산해서 반드시 log_habit 액션을 만들어. 목표를 모르거나 정확한 계산이 어려우면 정확도보다 "반드시 액션을 만드는 것"이 우선이야 — percent를 상식적으로 추정해서(예: "다 했어"=90~100, "조금 했어"=20~40, 구체적 시간이 있으면 목표 대비 비율로) 절대 actions를 비우지 마.
-- 습관 관련 메시지에는 위 되묻기(clarification) 규칙을 적용하지 마 — 습관 이름이 짧거나 구체적이지 않아도 되묻지 말고 사용자가 말한 그대로 이름으로 사용해서 바로 add_habit/log_habit을 실행해.
-- 예시) 사용자: "오늘부터 매일 스트레칭하기로 했고, 방금 5분 했어" → {"reply":"스트레칭 습관 시작했어요! 오늘 몫도 기록했어요.","actions":[{"type":"add_habit","name":"스트레칭","goal":""},{"type":"log_habit","habitNameMatch":"스트레칭","percent":70,"note":"5분"}]}
+- 습관 이름/목표에 대해서는 위 되묻기(clarification) 규칙을 적용하지 마 — 습관 이름이 짧거나 구체적이지 않아도 되묻지 말고 사용자가 말한 그대로 이름으로 사용해서 바로 add_habit/log_habit을 실행해. (단, 날짜에 대해서는 아래 "습관 기록 날짜 확인 규칙"을 따로 적용해.)
+- 예시) 사용자: "오늘부터 매일 스트레칭하기로 했고, 방금 5분 했어" → {"reply":"스트레칭 습관 시작했어요! 오늘 몫도 기록했어요.","actions":[{"type":"add_habit","name":"스트레칭","goal":""},{"type":"log_habit","habitNameMatch":"스트레칭","percent":70,"note":"5분"}],"askDateChoice":false}
+
+습관 기록 날짜 확인 규칙:
+- 습관을 "기록"하는 메시지에 오늘/어제/그제/특정 날짜(예: "9/1에", "지난주 화요일") 같은 날짜 표현이 전혀 없으면, log_habit을 바로 실행하지 말고 reply에서 "언제 하셨나요?"처럼 되묻고, actions는 빈 배열로 두고 askDateChoice를 true로 설정해.
+- 날짜 표현이 이미 있으면(예: "오늘 독서했어", "어제 8분 했어") 그 날짜를 YYYY-MM-DD로 변환해 log_habit의 date 필드에 넣어 바로 실행하고, askDateChoice는 false로 둬.
+- 직전 네 reply가 습관 기록 날짜를 되물은 것이었고, 이번 사용자 메시지가 그 답(예: "오늘", "어제", 버튼으로 직접 고른 YYYY-MM-DD)이라면: 그 이전 사용자 메시지에서 언급된 습관 내용을 참고해서, 이번에 확인된 날짜를 date 필드에 넣어 log_habit을 실행해(다시 되묻지 마).
+- add_habit만 필요한 경우(아직 실행 기록 없이 습관만 새로 만드는 경우)나 습관과 무관한 모든 응답에서는 항상 askDateChoice를 false로 둬.
 
 날짜 규칙:
 - 오늘 날짜: ${todayStr()}
-- "내일"=오늘+1일, "모레"=오늘+2일, "글피"=오늘+3일. 요일 표현("이번 주 금요일" 등)은 가장 가까운 미래의 그 요일로 계산.
+- "내일"=오늘+1일, "모레"=오늘+2일, "글피"=오늘+3일, "어제"=오늘-1일, "그제"/"그저께"=오늘-2일. 요일 표현("이번 주 금요일" 등)은 가장 가까운 미래의 그 요일로 계산.
 - "~까지"는 endDate로 사용하고 startDate는 오늘 날짜로 둬.
 - 사용자가 "9/1~9/14", "9.1-9.14", "9월 1일~9월 14일"처럼 시작~끝 날짜를 직접 명시하면 그대로 startDate/endDate로 변환해. 연도가 안 적혀 있으면 오늘(${todayStr()}) 기준 올해를 쓰고, 그 날짜가 이미 지난 날짜면 내년으로 넘겨. 날짜가 하루만 적혀 있으면 startDate와 endDate를 같은 날로 둬.
 - 모든 날짜는 정확한 YYYY-MM-DD로 변환해서 사용해.
@@ -1838,7 +1845,9 @@ action 타입:
 - 직전 네 메시지가 무엇인지 되물었고 이번 사용자 메시지가 그 답이라면: 사용자가 구체적인 이름을 말했으면 그 이름으로 title을 만들고("확률과통계 과제"), 사용자가 "그냥 과제야"/"몰라"처럼 구체적인 이름 없이 답했다면 title을 "과제"로 만들어.
 - 이미 구체적인 이름이 처음부터 포함되어 있으면(예: "A기업 서류", "A 그룹 신입채용") 되묻지 말고 바로 add_schedule을 만들어.
 
-예시) 카테고리 목록에 "job: 취업준비"가 있을 때, 사용자: "A 그룹 9/1~9/14 신입채용" → "신입채용"은 취업준비의 의미 범위에 속하므로 → {"reply":"취업준비에 A 그룹 신입채용 일정을 9/1~9/14로 등록했어요.","actions":[{"type":"add_schedule","title":"A 그룹 신입채용","categoryId":"job","startDate":"2026-09-01","endDate":"2026-09-14"}]} (카테고리 이름이 "구직"이나 "커리어"였어도 같은 방식으로 판단했을 거야 — "job"이라는 id가 아니라 "취업준비"라는 이름의 뜻으로 판단한 것.)
+예시) 카테고리 목록에 "job: 취업준비"가 있을 때, 사용자: "A 그룹 9/1~9/14 신입채용" → "신입채용"은 취업준비의 의미 범위에 속하므로 → {"reply":"취업준비에 A 그룹 신입채용 일정을 9/1~9/14로 등록했어요.","actions":[{"type":"add_schedule","title":"A 그룹 신입채용","categoryId":"job","startDate":"2026-09-01","endDate":"2026-09-14"}],"askDateChoice":false} (카테고리 이름이 "구직"이나 "커리어"였어도 같은 방식으로 판단했을 거야 — "job"이라는 id가 아니라 "취업준비"라는 이름의 뜻으로 판단한 것.)
+
+예시) 사용자: "듀오링고 했어" (날짜 표현 없음) → {"reply":"언제 하셨나요?","actions":[],"askDateChoice":true} → 사용자: "어제" → {"reply":"어제 듀오링고 기록했어요.","actions":[{"type":"log_habit","habitNameMatch":"듀오링고","percent":100,"note":"","date":"${addDays(todayStr(), -1)}"}],"askDateChoice":false}
 
 기타 규칙:
 - 사용 가능한 카테고리 목록(id: 이름): ${data.categories.map((c) => `${c.id}: ${c.name}`).join(", ")}
@@ -1916,7 +1925,7 @@ function applyActions(actions, setData) {
           0,
           Math.min(100, Number.isFinite(Number(a.percent)) ? Number(a.percent) : 50)
         );
-        const date = todayStr();
+        const date = /^\d{4}-\d{2}-\d{2}$/.test(a.date || "") ? a.date : todayStr();
         const existing = next.habitLogs.find(
           (l) => l.habitId === habit.id && l.date === date
         );
@@ -1943,7 +1952,11 @@ function AssistantScreen({ data, setData, messages, setMessages }) {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [showCustomDate, setShowCustomDate] = useState(false);
+  const [customDate, setCustomDate] = useState(todayStr());
   const bottomRef = useRef(null);
+  const lastMsg = messages[messages.length - 1];
+  const showDateChoice = !busy && lastMsg?.role === "assistant" && lastMsg?.askDateChoice;
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -1956,6 +1969,7 @@ function AssistantScreen({ data, setData, messages, setMessages }) {
     const nextMessages = [...messages, userMsg];
     setMessages(nextMessages);
     setInput("");
+    setShowCustomDate(false);
     setBusy(true);
     try {
       const apiMessages = nextMessages.map((m) => ({
@@ -1975,15 +1989,20 @@ function AssistantScreen({ data, setData, messages, setMessages }) {
         if (typeof parsed.reply !== "string" || !parsed.reply.trim()) {
           parsed.reply = "확인했어요.";
         }
+        parsed.askDateChoice = parsed.askDateChoice === true;
       } catch (parseErr) {
         console.error("mybiseo assistant JSON parse error", parseErr, raw);
         parsed = {
           reply: raw.trim() || "음, 잘 이해하지 못했어요. 다시 말씀해주실래요?",
           actions: [],
+          askDateChoice: false,
         };
       }
       applyActions(parsed.actions, setData);
-      setMessages((m) => [...m, { id: uid(), role: "assistant", text: parsed.reply }]);
+      setMessages((m) => [
+        ...m,
+        { id: uid(), role: "assistant", text: parsed.reply, askDateChoice: parsed.askDateChoice },
+      ]);
     } catch (e) {
       console.error("mybiseo assistant request error", e);
       const detail = e?.message ? ` (${e.message})` : "";
@@ -2072,6 +2091,51 @@ function AssistantScreen({ data, setData, messages, setMessages }) {
             </div>
           </div>
         ))}
+        {showDateChoice && (
+          <div className="flex flex-col gap-2">
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => send("오늘")}
+                className="text-xs px-3 py-2 rounded-2xl"
+                style={{ background: C.lavender, color: C.ink }}
+              >
+                오늘
+              </button>
+              <button
+                onClick={() => send("어제")}
+                className="text-xs px-3 py-2 rounded-2xl"
+                style={{ background: C.lavender, color: C.ink }}
+              >
+                어제
+              </button>
+              <button
+                onClick={() => setShowCustomDate((v) => !v)}
+                className="text-xs px-3 py-2 rounded-2xl"
+                style={{ background: C.lavender, color: C.ink }}
+              >
+                날짜 직접 선택
+              </button>
+            </div>
+            {showCustomDate && (
+              <div className="flex items-center gap-2">
+                <input
+                  type="date"
+                  value={customDate}
+                  max={todayStr()}
+                  onChange={(e) => setCustomDate(e.target.value)}
+                  style={{ ...inputStyle, flex: 1 }}
+                />
+                <button
+                  onClick={() => send(customDate)}
+                  className="text-xs px-3 py-2 rounded-xl shrink-0 font-semibold"
+                  style={{ background: C.lavenderDeep, color: "#fff" }}
+                >
+                  확인
+                </button>
+              </div>
+            )}
+          </div>
+        )}
         {busy && (
           <div className="flex justify-start">
             <div
