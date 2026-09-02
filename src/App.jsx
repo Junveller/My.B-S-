@@ -2217,7 +2217,7 @@ function BottomNav({ screen, setScreen }) {
   ];
   return (
     <div
-      className="flex items-end justify-around py-2"
+      className="flex items-end justify-around py-1"
       style={{ borderTop: `1px solid ${C.border}`, background: C.card }}
     >
       {items.map((it) => {
@@ -2230,10 +2230,10 @@ function BottomNav({ screen, setScreen }) {
               className="flex flex-col items-center gap-0.5 px-2 -mt-5"
             >
               <span
-                className="w-11 h-11 rounded-full flex items-center justify-center shadow-md"
+                className="w-12 h-12 rounded-full flex items-center justify-center shadow-md"
                 style={{ background: activeItem ? C.lavenderDeep : C.lavender }}
               >
-                <it.icon size={20} color={activeItem ? "#fff" : C.lavenderDeep} />
+                <it.icon size={23} color={activeItem ? "#fff" : C.lavenderDeep} />
               </span>
               <span
                 className="text-[10px] mt-0.5"
@@ -2251,7 +2251,7 @@ function BottomNav({ screen, setScreen }) {
             className="flex flex-col items-center gap-0.5 px-2 py-1"
           >
             <it.icon
-              size={20}
+              size={23}
               color={activeItem ? C.lavenderDeep : C.inkMuted}
               fill={activeItem && it.key === "home" ? C.lavenderDeep : "none"}
             />
