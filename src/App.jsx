@@ -195,7 +195,7 @@ function Home_({
   };
 
   return (
-    <div className="flex flex-col h-full px-6 pt-10 pb-6">
+    <div className="flex flex-col h-full px-6 pt-2 pb-6">
       <div className="flex items-center justify-between mb-1">
         <span className="text-sm" style={{ color: C.inkMuted }}>
           {username ? `${username}님, ` : ""}오늘도 잘하고 있어요
@@ -412,7 +412,7 @@ function CalendarScreen({ data, setData }) {
     .sort((a, b) => a.startDate.localeCompare(b.startDate));
 
   return (
-    <div className="flex flex-col h-full px-3 pt-8 overflow-y-auto pb-4">
+    <div className="flex flex-col h-full px-3 pt-2 overflow-y-auto pb-4">
       <div className="flex items-center justify-between mb-4 px-2">
         <IconBtn onClick={() => monthChange(-1)} label="이전 달">
           <ChevronLeft size={20} />
@@ -928,7 +928,7 @@ function ChecklistScreen({ data, setData }) {
   );
 
   return (
-    <div className="flex flex-col h-full px-5 pt-8 pb-4 overflow-y-auto">
+    <div className="flex flex-col h-full px-5 pt-2 pb-4 overflow-y-auto">
       <div className="flex items-center justify-between mb-5">
         <h2 className="text-xl font-bold" style={{ color: C.ink }}>
           체크리스트
@@ -1661,7 +1661,7 @@ function HabitsScreen({ data, setData }) {
   };
 
   return (
-    <div className="flex flex-col h-full px-5 pt-8 pb-4 overflow-y-auto">
+    <div className="flex flex-col h-full px-5 pt-2 pb-4 overflow-y-auto">
       <div className="flex items-center justify-between mb-5">
         <h2 className="text-xl font-bold" style={{ color: C.ink }}>
           습관
@@ -2162,7 +2162,7 @@ function AssistantScreen({ data, setData, messages, setMessages }) {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="px-5 pt-8 pb-3 flex items-center justify-between">
+      <div className="px-5 pt-2 pb-3 flex items-center justify-between">
         <h2 className="text-xl font-bold" style={{ color: C.ink }}>
           비서
         </h2>
@@ -2347,7 +2347,7 @@ function BottomNav({ screen, setScreen }) {
   ];
   return (
     <div
-      className="flex items-end justify-around py-1"
+      className="flex items-end justify-around py-4"
       style={{ borderTop: `1px solid ${C.border}`, background: C.card }}
     >
       {items.map((it) => {
@@ -2357,16 +2357,16 @@ function BottomNav({ screen, setScreen }) {
             <button
               key={it.key}
               onClick={() => setScreen(it.key)}
-              className="flex flex-col items-center gap-0.5 px-2 -mt-5"
+              className="flex flex-col items-center gap-0.5 px-2 -mt-7"
             >
               <span
-                className="w-12 h-12 rounded-full flex items-center justify-center shadow-md"
+                className="w-16 h-16 rounded-full flex items-center justify-center shadow-md"
                 style={{ background: activeItem ? C.lavenderDeep : C.lavender }}
               >
-                <it.icon size={23} color={activeItem ? "#fff" : C.lavenderDeep} />
+                <it.icon size={30} color={activeItem ? "#fff" : C.lavenderDeep} />
               </span>
               <span
-                className="text-[10px] mt-0.5"
+                className="text-[12px] mt-0.5"
                 style={{ color: activeItem ? C.lavenderDeep : C.inkMuted }}
               >
                 {it.label}
@@ -2381,12 +2381,12 @@ function BottomNav({ screen, setScreen }) {
             className="flex flex-col items-center gap-0.5 px-2 py-1"
           >
             <it.icon
-              size={23}
+              size={30}
               color={activeItem ? C.lavenderDeep : C.inkMuted}
               fill={activeItem && it.key === "home" ? C.lavenderDeep : "none"}
             />
             <span
-              className="text-[10px]"
+              className="text-[12px]"
               style={{ color: activeItem ? C.lavenderDeep : C.inkMuted }}
             >
               {it.label}
