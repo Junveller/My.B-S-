@@ -2055,6 +2055,12 @@ function AssistantScreen({ data, setData, messages, setMessages }) {
   const [showCustomDate, setShowCustomDate] = useState(false);
   const [customDate, setCustomDate] = useState(todayStr());
   const bottomRef = useRef(null);
+  // setBusy(true) doesn't take effect until the next render, so a second
+  // send() call that lands before that re-render (e.g. a fast double
+  // click/tap firing two click events in the same tick) could slip past
+  // the `busy` check above. This ref is synchronous, so it closes that
+  // window regardless of render timing.
+  const sendingRef = useRef(false);
   const lastMsg = messages[messages.length - 1];
   const showDateChoice = !busy && lastMsg?.role === "assistant" && lastMsg?.askDateChoice;
   const pendingSchedules = !busy && lastMsg?.role === "assistant" ? lastMsg?.pendingSchedules || [] : [];
@@ -2065,7 +2071,8 @@ function AssistantScreen({ data, setData, messages, setMessages }) {
 
   const send = async (text) => {
     const t = text.trim();
-    if (!t || busy) return;
+    if (!t || busy || sendingRef.current) return;
+    sendingRef.current = true;
     const userMsg = { id: uid(), role: "user", text: t };
     const nextMessages = [...messages, userMsg];
     setMessages(nextMessages);
@@ -2130,6 +2137,7 @@ function AssistantScreen({ data, setData, messages, setMessages }) {
       ]);
     } finally {
       setBusy(false);
+      sendingRef.current = false;
     }
   };
 

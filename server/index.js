@@ -237,9 +237,17 @@ app.post("/api/chat", authMiddleware, async (req, res) => {
     return res.status(400).json({ error: "messages must be an array" });
   }
 
+  // One id per incoming /api/chat request (i.e. per user message), so the
+  // logs below make it possible to see, for any single message, exactly
+  // how many outbound Gemini calls it produced and why.
+  const requestId = crypto.randomUUID().slice(0, 8);
+  let geminiCallCount = 0;
+
   try {
-    const callGemini = () =>
-      fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
+    const callGemini = () => {
+      geminiCallCount++;
+      console.log(`mybiseo /api/chat[${requestId}]: calling Gemini (call #${geminiCallCount})`);
+      return fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -258,6 +266,7 @@ app.post("/api/chat", authMiddleware, async (req, res) => {
           },
         }),
       });
+    };
 
     let geminiRes = await callGemini();
     let json = await geminiRes.json();
@@ -273,12 +282,16 @@ app.post("/api/chat", authMiddleware, async (req, res) => {
       const retryDelayMs = parseGeminiRetryDelayMs(json);
       if (retryDelayMs == null || retryDelayMs > MAX_RETRY_WAIT_MS) break;
       console.warn(
-        `mybiseo /api/chat: Gemini quota exceeded, waiting ${retryDelayMs}ms then retrying (attempt ${attempt + 1}/${MAX_QUOTA_RETRIES})`
+        `mybiseo /api/chat[${requestId}]: Gemini quota exceeded, waiting ${retryDelayMs}ms then retrying (attempt ${attempt + 1}/${MAX_QUOTA_RETRIES})`
       );
       await sleep(retryDelayMs);
       geminiRes = await callGemini();
       json = await geminiRes.json();
     }
+
+    console.log(
+      `mybiseo /api/chat[${requestId}]: finished with ${geminiCallCount} Gemini call(s) total, final status ${geminiRes.status}`
+    );
 
     if (!geminiRes.ok) {
       console.error("Gemini API error", geminiRes.status, json);
@@ -326,7 +339,7 @@ app.post("/api/chat", authMiddleware, async (req, res) => {
     // already parses, so nothing on the frontend needs to change.
     res.json({ content: [{ type: "text", text: safeText }] });
   } catch (e) {
-    console.error("chat proxy error", e);
+    console.error(`mybiseo /api/chat[${requestId}]: chat proxy error after ${geminiCallCount} Gemini call(s)`, e);
     res.status(502).json({ error: "비서 서버 연결에 실패했어요." });
   }
 });
