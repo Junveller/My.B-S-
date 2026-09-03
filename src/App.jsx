@@ -1944,15 +1944,27 @@ function isDuplicateSchedule(scheduleItems, { title, categoryId, startDate, endD
 // add_schedule action들 중 categoryId가 실제 카테고리와 정확히 일치하지
 // 않는 것들을 모아서, AI를 다시 거치지 않고 채팅 버튼으로 바로 처리할 수
 // 있게 한다 (AssistantScreen이 이 목록을 메시지에 붙여 렌더링한다).
+//
+// 날짜는 여기서 바로 확정하지 않는다 — 모델이 준 startDate/endDate와
+// 원본 reply 텍스트를 그대로 들고 있다가, 사용자가 카테고리 버튼을 눌러
+// 최종 저장하는 시점(commitScheduleCategory)에 buildScheduleCandidate로
+// 다시 계산한다. 그래야 최종 저장 단계에서도 reply 텍스트에서 뽑아낸
+// 날짜("9/1~9/14" 등)가 그대로 반영된다.
 function derivePendingSchedules(actions, categories, replyText) {
   if (!Array.isArray(actions)) return [];
   const pending = [];
   for (const a of actions) {
     if (a.type !== "add_schedule") continue;
     if (categoryExactMatch(categories, a.categoryId)) continue;
-    const candidate = buildScheduleCandidate(a, replyText);
-    if (!candidate.title) continue;
-    pending.push({ id: uid(), ...candidate });
+    const title = (a.title || "").trim();
+    if (!title) continue;
+    pending.push({
+      id: uid(),
+      title,
+      startDate: a.startDate,
+      endDate: a.endDate,
+      replyText,
+    });
   }
   return pending;
 }
@@ -2126,12 +2138,20 @@ function AssistantScreen({ data, setData, messages, setMessages }) {
   // send()를 부르지 않는다: 카테고리 선택은 이미 로컬에 있는 정보만으로
   // 결정할 수 있는 일이라 AI에게 다시 물을 이유가 없다.
   const commitScheduleCategory = (pending, categoryId) => {
+    // 최종 저장 단계에서 다시 날짜를 확정한다 — pending에 들고 있던
+    // startDate/endDate(모델이 비워서 줬을 수 있음)와 원본 reply 텍스트를
+    // buildScheduleCandidate에 함께 넘겨서, "9/1~9/14" 같은 날짜가 이
+    // 시점에도 반영되게 한다.
+    const resolved = buildScheduleCandidate(
+      { title: pending.title, startDate: pending.startDate, endDate: pending.endDate },
+      pending.replyText
+    );
     setData((d) => {
       const item = {
-        title: pending.title,
+        title: resolved.title,
         categoryId,
-        startDate: pending.startDate,
-        endDate: pending.endDate,
+        startDate: resolved.startDate,
+        endDate: resolved.endDate,
       };
       if (isDuplicateSchedule(d.scheduleItems, item)) return d;
       return {
