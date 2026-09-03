@@ -191,6 +191,34 @@ const REPLY_SCHEMA = {
 };
 
 /* ------------------------------------------------------------------ */
+/* Gemini's free-tier quota errors come back as HTTP 429 with a         */
+/* RetryInfo detail telling us exactly how long to back off             */
+/* (e.g. {"@type":"...RetryInfo","retryDelay":"27.24s"}), and           */
+/* sometimes the same hint only shows up in the error message text      */
+/* ("...Please retry in 27.24s."). Pull whichever is present.           */
+/* ------------------------------------------------------------------ */
+function parseGeminiRetryDelayMs(errorBody) {
+  const details = errorBody?.error?.details;
+  if (Array.isArray(details)) {
+    const retryInfo = details.find(
+      (d) => d["@type"] === "type.googleapis.com/google.rpc.RetryInfo"
+    );
+    const match = typeof retryInfo?.retryDelay === "string" && retryInfo.retryDelay.match(/^([\d.]+)s$/);
+    if (match) return Math.round(parseFloat(match[1]) * 1000);
+  }
+  const message = errorBody?.error?.message;
+  const match = typeof message === "string" && message.match(/retry in\s+([\d.]+)\s*s/i);
+  return match ? Math.round(parseFloat(match[1]) * 1000) : null;
+}
+
+// Quota-exceeded retries only: honor Gemini's own suggested wait, capped
+// so a single request can't hang indefinitely if it ever suggests
+// something absurd (e.g. a daily-quota reset hours away).
+const MAX_QUOTA_RETRIES = 2;
+const MAX_RETRY_WAIT_MS = 60000;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/* ------------------------------------------------------------------ */
 /* /api/chat — proxies the assistant conversation to the Gemini         */
 /* generateContent API. Requires login (authMiddleware) so the free-    */
 /* tier Gemini key can't be hit anonymously. The API key stays on the   */
@@ -210,9 +238,8 @@ app.post("/api/chat", authMiddleware, async (req, res) => {
   }
 
   try {
-    const geminiRes = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
-      {
+    const callGemini = () =>
+      fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -230,10 +257,29 @@ app.post("/api/chat", authMiddleware, async (req, res) => {
             responseSchema: REPLY_SCHEMA,
           },
         }),
-      }
-    );
+      });
 
-    const json = await geminiRes.json();
+    let geminiRes = await callGemini();
+    let json = await geminiRes.json();
+
+    // 429 quota-exceeded: wait exactly as long as Gemini says to, then
+    // retry automatically — the client never sees this happening unless
+    // every retry is also exhausted.
+    for (
+      let attempt = 0;
+      !geminiRes.ok && geminiRes.status === 429 && attempt < MAX_QUOTA_RETRIES;
+      attempt++
+    ) {
+      const retryDelayMs = parseGeminiRetryDelayMs(json);
+      if (retryDelayMs == null || retryDelayMs > MAX_RETRY_WAIT_MS) break;
+      console.warn(
+        `mybiseo /api/chat: Gemini quota exceeded, waiting ${retryDelayMs}ms then retrying (attempt ${attempt + 1}/${MAX_QUOTA_RETRIES})`
+      );
+      await sleep(retryDelayMs);
+      geminiRes = await callGemini();
+      json = await geminiRes.json();
+    }
+
     if (!geminiRes.ok) {
       console.error("Gemini API error", geminiRes.status, json);
       return res.status(geminiRes.status).json({
