@@ -57,6 +57,8 @@ export async function saveSettings(changes: Partial<Settings>, nickname: string)
   await put<Settings>('settings', { ...cur, ...changes });
 }
 
+const LAST_DAY_SEED = 31; // 말일
+
 /** 첫 실행 기본 데이터 */
 export async function seedIfEmpty(nickname: string) {
   if ((await db.categories.count()) > 0 || (await db.settings.count()) > 0) return;
@@ -66,12 +68,12 @@ export async function seedIfEmpty(nickname: string) {
   for (const c of [study, job, gym]) await put('categories', c);
   const b = (categoryId: string, name: string, color: Bundle['color'], order: number, extra: Partial<Bundle> = {}) =>
     put<Bundle>('bundles', {
-      id: uid(), categoryId, name, color, order, income: false, wage: 0, payday: 10, settleStart: 11, ...extra,
+      id: uid(), categoryId, name, color, order, income: false, wage: 0, payday: 10, settleStart: 1, ...extra,
     });
   await b(study.id, '수학', 'yellow', 0);
   await b(study.id, '영어', 'blue', 1);
-  await b(job.id, '카페', 'green', 0, { income: true, wage: 10030, payday: 10, settleStart: 11 });
-  await b(job.id, '과외', 'orange', 1, { income: true, wage: 25000, payday: 25, settleStart: 26 });
+  await b(job.id, '카페', 'green', 0, { income: true, wage: 10030, payday: 10, settleStart: 1 });
+  await b(job.id, '과외', 'orange', 1, { income: true, wage: 25000, payday: LAST_DAY_SEED, settleStart: 1 });
   await b(gym.id, '헬스', 'pink', 0);
   const cats = [['식비', '#E8895A'], ['교통', '#5FA8D3'], ['카페·간식', '#E3C94A'], ['쇼핑', '#B08BE0'], ['기타', '#A9A9B4']];
   for (const [i, [name, color]] of cats.entries()) await put<ExpenseCategory>('expenseCategories', { id: uid(), name, color, order: i });

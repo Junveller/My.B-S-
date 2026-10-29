@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppContext, useApp, useMediaQuery, useSettingsRaw, type AppCtx } from './lib/hooks';
-import { adoptRecoverySession, currentSession, linkAccountToStore, type SessionInfo } from './lib/auth';
+import { currentSession, linkAccountToStore, type SessionInfo } from './lib/auth';
 import { initArtifactStore } from './lib/artifactStore';
 import { seedIfEmpty } from './lib/data';
 import { setMeta } from './lib/db';
-import { startSync, syncNow } from './lib/sync';
-import { supabase } from './lib/supabase';
+import { onSessionExpired, startSync, syncNow } from './lib/sync';
+import { clearLocalData } from './lib/data';
 import { AppTitle } from './components/ui';
 import { Icon } from './components/Icon';
 import { ConfirmHost } from './components/confirm';
-import { AuthScreen, RecoveryNotice, SetPinScreen } from './screens/Auth';
+import { AuthScreen, RecoveryNotice } from './screens/Auth';
 import { TodoScreen } from './screens/Todo';
 import { TimetableScreen } from './screens/Timetable';
 import { LedgerScreen } from './screens/Ledger';
@@ -29,7 +29,6 @@ export default function App() {
   const [booting, setBooting] = useState(true);
   const [session, setSessionState] = useState<SessionInfo | undefined>();
   const [notice, setNotice] = useState<string | null>(null);
-  const [recovering, setRecovering] = useState(false);
 
   const setSession = useCallback((s: SessionInfo | undefined) => {
     setSessionState(s);
@@ -37,23 +36,19 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const sub = supabase?.auth.onAuthStateChange((event) => {
-      if (event === 'PASSWORD_RECOVERY') {
-        setRecovering(true);
-        adoptRecoverySession().then(async (s) => {
-          if (s) {
-            await prepare(s);
-            setSessionState(s);
-          }
-        });
-      }
+    // 다른 기기에서 비밀번호를 재설정하면 이 기기의 로그인 토큰이 끊긴다 → 로그인 화면으로
+    const off = onSessionExpired(async () => {
+      await clearLocalData();
+      setSessionState(undefined);
     });
-    initArtifactStore().then(currentSession).then(async (s) => {
+    initArtifactStore().then(currentSession).then(async (s: SessionInfo | undefined) => {
       if (s) await prepare(s);
       setSessionState(s);
       setBooting(false);
     });
-    return () => sub?.data.subscription.unsubscribe();
+    return () => {
+      off();
+    };
   }, []);
 
   const onAuthed = async (s: SessionInfo, isNew: boolean) => {
@@ -64,7 +59,6 @@ export default function App() {
 
   if (booting) return <div className="boot" aria-busy="true" />;
   if (!session) return <AuthScreen onAuthed={onAuthed} />;
-  if (recovering) return <SetPinScreen nickname={session.nickname} onDone={() => setRecovering(false)} />;
   if (notice) return <RecoveryNotice code={notice} nickname={session.nickname} onDone={() => setNotice(null)} />;
   return <Shell session={session} setSession={setSession} />;
 }

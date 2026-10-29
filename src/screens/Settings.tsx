@@ -4,10 +4,9 @@ import { saveSettings } from '../lib/data';
 import { askConfirm } from '../components/confirm';
 import { useApp } from '../lib/hooks';
 import {
-  authErrorMessage, linkedEmail, linkEmail, regenerateRecoveryCode, setPin, signOut, storageMode, syncedMode,
+  authErrorMessage, regenerateRecoveryCode, setPin, signOut, storageMode, syncedMode,
 } from '../lib/auth';
 import { getSyncStatus, onSyncStatus, syncNow, type SyncStatus } from '../lib/sync';
-import { remoteMode } from '../lib/supabase';
 import { artifactBuild } from '../lib/artifactStore';
 import { isPin } from '../lib/crypto';
 import type { ScreenKey, Sections } from '../lib/types';
@@ -110,10 +109,8 @@ const SYNC_LABEL: Record<SyncStatus, string> = {
 };
 
 export function SettingsScreen({ embedded }: { embedded?: boolean }) {
-  const { session, setSession, toast } = useApp();
+  const { session, setSession } = useApp();
   const [sync, setSync] = useState(getSyncStatus());
-  const [email, setEmail] = useState<string | null>(null);
-  const [emailInput, setEmailInput] = useState('');
   const [pinOpen, setPinOpen] = useState(false);
   const [codeOpen, setCodeOpen] = useState(false);
   const standalone = matchMedia('(display-mode: standalone)').matches || (navigator as { standalone?: boolean }).standalone;
@@ -122,20 +119,6 @@ export function SettingsScreen({ embedded }: { embedded?: boolean }) {
     const off = onSyncStatus(setSync);
     return () => { off(); };
   }, []);
-  useEffect(() => {
-    if (remoteMode) linkedEmail().then(setEmail);
-  }, []);
-
-  const connectEmail = async () => {
-    try {
-      await linkEmail(emailInput.trim());
-      toast('확인 메일을 보냈어요. 메일의 링크를 누르면 연결돼요.');
-      setEmailInput('');
-    } catch (e) {
-      toast(authErrorMessage(e));
-    }
-  };
-
   const logout = async () => {
     const msg = {
       server: '로그아웃할까요? 다시 로그인하면 서버에서 데이터를 불러와요.',
@@ -169,21 +152,6 @@ export function SettingsScreen({ embedded }: { embedded?: boolean }) {
           <Row label="복구 코드 확인" sub="비밀번호를 잊었을 때 필요해요">
             <button type="button" className="btn soft small" onClick={() => setCodeOpen(true)}>보기</button>
           </Row>
-          {remoteMode ? (
-            email ? (
-              <Row label="이메일 연결됨" sub={email} />
-            ) : (
-              <Field label="이메일 연결 (선택)" hint="연결하면 비밀번호를 메일로 재설정할 수 있어요">
-                <span className="input-row">
-                  <input className="input" type="email" autoComplete="email" value={emailInput} placeholder="name@example.com"
-                    onChange={(e) => setEmailInput(e.target.value)} />
-                  <button type="button" className="btn primary small" disabled={!emailInput.includes('@')} onClick={connectEmail}>연결</button>
-                </span>
-              </Field>
-            )
-          ) : (
-            <Row label="이메일 연결 (선택)" sub="서버가 연결된 경우에만 사용할 수 있어요" />
-          )}
         </div>
 
         <h3 className="section-title">저장 · 동기화</h3>

@@ -3,32 +3,33 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
-/** 서버가 설정되지 않으면 null → 로컬 모드 */
+/**
+ * 서버가 설정되지 않으면 null → 로컬 모드.
+ * 로그인은 Supabase Auth가 아니라 supabase/bisje.sql의 함수들이 처리하므로 Auth 세션은 쓰지 않는다.
+ */
 export const supabase: SupabaseClient | null = url && key
-  ? createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } })
+  ? createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } })
   : null;
 
 export const remoteMode = !!supabase;
-
-/** Edge Function 호출 (가입/로그인/잠금은 서버에서 처리) */
-export async function callAuth<T>(action: string, body: Record<string, unknown>, accessToken?: string): Promise<T> {
-  if (!url || !key) throw new Error('서버가 설정되지 않았어요');
-  const res = await fetch(`${url}/functions/v1/bisje-auth`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      apikey: key,
-      Authorization: `Bearer ${accessToken ?? key}`,
-    },
-    body: JSON.stringify({ action, ...body }),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new AuthError(data.error ?? 'server', data);
-  return data as T;
-}
 
 export class AuthError extends Error {
   constructor(public code: string, public data: Record<string, unknown> = {}) {
     super(code);
   }
+}
+
+/** 서버 함수 호출. 함수가 돌려준 {error}와 로그인 만료는 AuthError로 바꾼다 */
+export async function rpc<T>(fn: string, args: Record<string, unknown>): Promise<T> {
+  if (!supabase) throw new AuthError('local');
+  const { data, error } = await supabase.rpc(fn, args);
+  if (error) {
+    if (error.message === 'session') throw new AuthError('session');
+    throw new AuthError('server', { message: error.message });
+  }
+  const body = data as { error?: string } | null;
+  if (body && typeof body === 'object' && !Array.isArray(body) && body.error) {
+    throw new AuthError(body.error, body as Record<string, unknown>);
+  }
+  return data as T;
 }

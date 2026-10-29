@@ -4,7 +4,8 @@ import { VitePWA } from 'vite-plugin-pwa';
 
 // `--mode artifact`: claude.ai 페이지로 열 수 있게 한 파일로 묶는 빌드 (서비스 워커 없음)
 export default defineConfig(({ mode }) => ({
-  base: mode === 'artifact' ? './' : '/',
+  // GitHub Pages는 https://<사용자>.github.io/<저장소>/ 아래에서 열리므로 VITE_BASE로 경로를 준다
+  base: mode === 'artifact' ? './' : process.env.VITE_BASE || '/',
   build: mode === 'artifact'
     ? { outDir: 'dist-artifact', assetsInlineLimit: 100_000_000, rollupOptions: { output: { inlineDynamicImports: true } } }
     : undefined,
@@ -19,8 +20,8 @@ export default defineConfig(({ mode }) => ({
         short_name: 'Bisje',
         description: '개인 일정관리 플래너',
         lang: 'ko',
-        start_url: '/',
-        scope: '/',
+        start_url: '.',
+        scope: '.',
         display: 'standalone',
         orientation: 'any',
         background_color: '#F4F4F2',
@@ -33,7 +34,6 @@ export default defineConfig(({ mode }) => ({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
-        navigateFallback: '/index.html',
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/fonts\.(googleapis|gstatic)\.com\/.*/,

@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { Field, Segmented, TitleBar } from '../components/ui';
 import { PinInput } from './Settings';
 import {
-  authErrorMessage, requestEmailReset, resetWithCode, setPin, signIn, signUp, storageMode, type SessionInfo,
+  authErrorMessage, resetWithCode, signIn, signUp, storageMode, type SessionInfo,
 } from '../lib/auth';
 import { isPin } from '../lib/crypto';
 
@@ -20,7 +20,6 @@ function AppIcon() {
     </svg>
   );
 }
-import { remoteMode } from '../lib/supabase';
 
 type Mode = 'login' | 'signup' | 'reset';
 
@@ -30,14 +29,11 @@ export function AuthScreen({ onAuthed }: { onAuthed: (s: SessionInfo, isNew: boo
   const [pin, setPinV] = useState('');
   const [pin2, setPin2] = useState('');
   const [code, setCode] = useState('');
-  const [email, setEmail] = useState('');
   const [err, setErr] = useState('');
-  const [info, setInfo] = useState('');
   const [busy, setBusy] = useState(false);
 
   const run = async (fn: () => Promise<void>) => {
     setErr('');
-    setInfo('');
     setBusy(true);
     try {
       await fn();
@@ -67,7 +63,6 @@ export function AuthScreen({ onAuthed }: { onAuthed: (s: SessionInfo, isNew: boo
   const switchTo = (m: Mode) => {
     setMode(m);
     setErr('');
-    setInfo('');
     setPinV('');
     setPin2('');
   };
@@ -117,20 +112,6 @@ export function AuthScreen({ onAuthed }: { onAuthed: (s: SessionInfo, isNew: boo
         )}
         {mode === 'reset' && (
           <>
-            {remoteMode && (
-              <div className="card list">
-                <Field label="이메일을 연결했다면" hint="메일로 재설정 링크를 보내요">
-                  <span className="input-row">
-                    <input className="input" type="email" value={email} placeholder="name@example.com" onChange={(e) => setEmail(e.target.value)} />
-                    <button type="button" className="btn soft small" disabled={!email.includes('@') || busy}
-                      onClick={() => run(async () => { await requestEmailReset(email.trim()); setInfo('메일을 보냈어요. 링크를 눌러 새 비밀번호를 정하세요.'); })}>
-                      보내기
-                    </button>
-                  </span>
-                </Field>
-                {info && <p className="ok" role="status">{info}</p>}
-              </div>
-            )}
             <button type="button" className="btn ghost wide" onClick={() => switchTo('login')}>로그인으로 돌아가기</button>
           </>
         )}
@@ -169,37 +150,6 @@ export function RecoveryNotice({ code, nickname, onDone }: { code: string; nickn
         </div>
         <button type="button" className="btn primary wide" onClick={onDone}>저장했어요</button>
       </div>
-    </div>
-  );
-}
-
-/** 이메일 재설정 링크로 들어온 경우 */
-export function SetPinScreen({ nickname, onDone }: { nickname: string; onDone: () => void }) {
-  const [a, setA] = useState('');
-  const [b, setB] = useState('');
-  const [err, setErr] = useState('');
-  const save = async (e: FormEvent) => {
-    e.preventDefault();
-    if (a !== b) return setErr('두 번 입력한 비밀번호가 달라요');
-    try {
-      await setPin(a);
-      onDone();
-    } catch (x) {
-      setErr(authErrorMessage(x));
-    }
-  };
-  return (
-    <div className="screen auth">
-      <TitleBar name={nickname} />
-      <form className="screen-body narrow" onSubmit={save}>
-        <h2 className="section-title">새 비밀번호 정하기</h2>
-        <div className="card list">
-          <Field label="새 비밀번호 (숫자 4자리)"><PinInput value={a} onChange={setA} autoFocus /></Field>
-          <Field label="한 번 더"><PinInput value={b} onChange={setB} /></Field>
-          {err && <p className="error" role="alert">{err}</p>}
-          <button type="submit" className="btn primary wide" disabled={!isPin(a) || !isPin(b)}>저장</button>
-        </div>
-      </form>
     </div>
   );
 }

@@ -6,6 +6,7 @@ import {
   addDays, fmtMinutes, monthRange, nextPayday, parseYmd, settlementRange, weekday, weekRange, won,
 } from '../lib/time';
 import type { Block, Bundle } from '../lib/types';
+import { LAST_DAY } from './BundleEdit';
 
 type Period = 'week' | 'month';
 const mins = (b: Block) => (b.end - b.start) * 10;
@@ -21,7 +22,7 @@ export function StatsScreen({ embedded }: { embedded?: boolean }) {
 
   const [from, to] = period === 'week' ? weekRange(today) : monthRange(today);
   const incomeBundles = bundles.filter((b) => b.income);
-  const settle = new Map(incomeBundles.map((b) => [b.id, settlementRange(today, b.settleStart)]));
+  const settle = new Map(incomeBundles.map((b) => [b.id, settlementRange(today, Math.min(28, Math.max(1, b.settleStart || 1)))]));
   let qFrom = from;
   let qTo = to;
   for (const [s, e] of settle.values()) {
@@ -111,7 +112,9 @@ export function StatsScreen({ embedded }: { embedded?: boolean }) {
                     <span className="spacer" />
                     <strong className="job-amount">{won(j.earned)}</strong>
                   </div>
-                  <span className="muted small">월급날 {short(j.pay.date)} · {j.pay.dday === 0 ? 'D-Day' : `D-${j.pay.dday}`}</span>
+                  <span className="muted small">
+                    정산 {short(j.s)} ~ {short(j.e)} · 월급날 {j.b.payday >= LAST_DAY ? `말일(${short(j.pay.date)})` : short(j.pay.date)} · {j.pay.dday === 0 ? 'D-Day' : `D-${j.pay.dday}`}
+                  </span>
                   <div className="stack-bar thin" role="img"
                     aria-label={`실제 ${fmtMinutes(j.doneMin)}, 계획 포함 ${fmtMinutes(j.planMin)}`}>
                     <span style={{ width: `${(j.doneMin / planMax) * 100}%`, background: c.dark }} />

@@ -10,10 +10,14 @@ import type { Bundle, Category, ColorKey } from '../lib/types';
 
 const NEW_CAT = '__new__';
 
-/** 정산기간은 월급날 다음 날부터 다음 월급날까지 */
-export const settleStartFor = (payday: number) => (payday >= 31 ? 1 : payday + 1);
+/** 31 = 말일 (30일까지인 달·2월에도 그 달 마지막 날) */
+export const LAST_DAY = 31;
+export const dayLabel = (n: number) => (n >= LAST_DAY ? '말일' : `${n}일`);
+/** 정산기간: 매달 시작일 ~ 다음 달 (시작일-1)일. 시작일이 1일이면 그 달 1일 ~ 말일 */
+export const periodLabel = (start: number) => (start <= 1 ? '매달 1일 ~ 말일' : `매달 ${start}일 ~ 다음 달 ${start - 1}일`);
+const SETTLE_DAYS = Array.from({ length: 28 }, (_, i) => i + 1);
 
-/** 묶음 편집 화면 (이름, 큰 카테고리, 색상, 수입 계산, 시급, 월급날, 삭제) */
+/** 묶음 편집 화면 (이름, 큰 카테고리, 색상, 수입 계산, 시급, 정산기간, 월급날, 삭제) */
 export function BundleEdit({ open, bundle, onClose }: { open: boolean; bundle?: Bundle; onClose: () => void }) {
   const categories = useCategories();
   const bundles = useBundles();
@@ -25,7 +29,7 @@ export function BundleEdit({ open, bundle, onClose }: { open: boolean; bundle?: 
     if (!open) return;
     setB(bundle ?? {
       id: uid(), categoryId: categories[0]?.id ?? NEW_CAT, name: '', color: 'yellow', order: 0,
-      income: false, wage: 10030, payday: 10, settleStart: 11, updatedAt: 0,
+      income: false, wage: 10030, payday: 10, settleStart: 1, updatedAt: 0,
     });
     setNewCat({ name: '', color: 'blue' });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -36,7 +40,8 @@ export function BundleEdit({ open, bundle, onClose }: { open: boolean; bundle?: 
   const siblings = bundles.filter((x) => x.categoryId === b.categoryId && x.id !== b.id);
   const set = (c: Partial<Bundle>) => setB({ ...b, ...c });
   const valid = !!b.name.trim() && (b.categoryId !== NEW_CAT || !!newCat.name.trim());
-  const [ps, pe] = settlementRange(today, settleStartFor(b.payday));
+  const settleStart = clampSettle(b.settleStart);
+  const [ps, pe] = settlementRange(today, settleStart);
 
   const save = async () => {
     if (!valid) return;
@@ -53,7 +58,7 @@ export function BundleEdit({ open, bundle, onClose }: { open: boolean; bundle?: 
     const payday = clampDay(b.payday);
     await put<Bundle>('bundles', {
       ...b, categoryId, order, name: b.name.trim(),
-      wage: Math.max(0, Math.round(b.wage || 0)), payday, settleStart: settleStartFor(payday),
+      wage: Math.max(0, Math.round(b.wage || 0)), payday, settleStart,
     });
     onClose();
   };
@@ -123,13 +128,23 @@ export function BundleEdit({ open, bundle, onClose }: { open: boolean; bundle?: 
                   onChange={(e) => set({ wage: Number(e.target.value.replace(/\D/g, '')) })} />원
               </span>
             </Row>
+            <Row label="정산기간" sub={periodLabel(settleStart)}>
+              <select className="input select" value={settleStart} aria-label="정산기간 시작일"
+                onChange={(e) => set({ settleStart: Number(e.target.value) })}>
+                {SETTLE_DAYS.map((n) => (
+                  <option key={n} value={n}>{n === 1 ? '1일 ~ 말일' : `${n}일 ~ 다음 달 ${n - 1}일`}</option>
+                ))}
+              </select>
+            </Row>
             <Row label="월급날">
               <select className="input select" value={clampDay(b.payday)} aria-label="월급날"
                 onChange={(e) => set({ payday: Number(e.target.value) })}>
-                {Array.from({ length: 31 }, (_, i) => i + 1).map((n) => <option key={n} value={n}>매달 {n}일</option>)}
+                {Array.from({ length: LAST_DAY }, (_, i) => i + 1).map((n) => <option key={n} value={n}>매달 {dayLabel(n)}</option>)}
               </select>
             </Row>
-            <p className="muted small row-note">지금 정산 기간은 {shortDate(ps)} ~ {shortDate(pe)}이에요</p>
+            <p className="muted small row-note">
+              지금 정산 기간은 {shortDate(ps)} ~ {shortDate(pe)}이에요. 이 기간에 DONE으로 기록한 시간 × 시급으로 계산해요.
+            </p>
           </>
         )}
       </div>
@@ -150,7 +165,9 @@ export function BundleEdit({ open, bundle, onClose }: { open: boolean; bundle?: 
 }
 
 const shortDate = (s: string) => `${Number(s.slice(5, 7))}/${Number(s.slice(8, 10))}`;
-const clampDay = (n: number) => Math.min(31, Math.max(1, Math.round(n || 1)));
+const clampDay = (n: number) => Math.min(LAST_DAY, Math.max(1, Math.round(n || 1)));
+/** 예전 버전의 29~31일 시작은 28일로 맞춘다 (모든 달에 있는 날만 시작일로) */
+const clampSettle = (n: number) => Math.min(28, Math.max(1, Math.round(n || 1)));
 
 /** 큰 카테고리 편집: 이름, 색, 순서, 삭제 */
 export function CategoryEdit({ category, onClose }: { category: Category | null; onClose: () => void }) {

@@ -1,0 +1,45 @@
+# 사이트 배포: 빌드해서 gh-pages 브랜치에 올린다.
+# 처음 한 번 Settings → Pages → Source: "Deploy from a branch", Branch: gh-pages / (root) 로 설정.
+# 서버를 연결하려면 Settings → Secrets and variables → Actions → Variables 에
+# VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY 를 넣고 다시 실행(Actions → Deploy → Run workflow).
+name: Deploy
+
+on:
+  push:
+    branches: [main, claude/bisje-pwa]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build
+        run: npm run build
+        env:
+          VITE_BASE: /${{ github.event.repository.name }}/
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+      - name: Publish to gh-pages
+        run: |
+          cp dist/index.html dist/404.html
+          touch dist/.nojekyll
+          cd dist
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Deploy ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" gh-pages

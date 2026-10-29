@@ -1,7 +1,7 @@
 import { delMeta, getMeta, setMeta } from './db';
 import { clearLocalData } from './data';
 import { isPin, kdf, makeRecoveryCode, normalizeCode, randomHex } from './crypto';
-import { AuthError, callAuth, remoteMode, supabase } from './supabase';
+import { AuthError, remoteMode, rpc } from './supabase';
 import { flushSync, resetSyncState } from './sync';
 import { disableArtifactStore, getArtifactStore } from './artifactStore';
 
@@ -10,6 +10,8 @@ export interface SessionInfo {
   userId: string;
   /** 가입 직후 보여준 복구 코드 (설정 > 복구 코드 확인용, 이 기기에만 보관) */
   recoveryCode?: string;
+  /** 서버 로그인 토큰 (서버 모드) */
+  token?: string;
 }
 
 interface LocalAccount {
@@ -83,10 +85,7 @@ export async function currentSession(): Promise<SessionInfo | undefined> {
     await setMeta('session', adopted);
     return adopted;
   }
-  if (supabase) {
-    const { data } = await supabase.auth.getSession();
-    if (!data.session) return undefined;
-  }
+  if (remoteMode && !s.token) return undefined;
   return s;
 }
 
@@ -102,13 +101,23 @@ export function validateNickname(n: string) {
   return null;
 }
 
-type RemoteSession = { access_token: string; refresh_token: string };
+interface RemoteLogin {
+  token: string;
+  userId: string;
+  nickname: string;
+  recoveryCode?: string;
+}
 
-async function adoptRemote(session: RemoteSession, nickname: string, userId: string, recoveryCode?: string) {
-  await supabase!.auth.setSession(session);
-  const info: SessionInfo = { nickname, userId, recoveryCode };
+async function adoptRemote(r: RemoteLogin) {
+  const info: SessionInfo = { nickname: r.nickname, userId: r.userId, token: r.token, recoveryCode: r.recoveryCode };
   await setMeta('session', info);
   return info;
+}
+
+async function token() {
+  const t = (await getMeta<SessionInfo>('session'))?.token;
+  if (!t) throw new AuthError('session');
+  return t;
 }
 
 export async function signUp(nickname: string, pin: string): Promise<SessionInfo> {
@@ -117,8 +126,7 @@ export async function signUp(nickname: string, pin: string): Promise<SessionInfo
   if (bad) throw new AuthError('nickname', { message: bad });
   if (!isPin(pin)) throw new AuthError('pin');
   if (remoteMode) {
-    const r = await callAuth<{ session: RemoteSession; userId: string; recoveryCode: string }>('signup', { nickname, pin });
-    return adoptRemote(r.session, nickname, r.userId, r.recoveryCode);
+    return adoptRemote(await rpc<RemoteLogin>('bisje_signup', { p_nickname: nickname, p_pin: pin }));
   }
   const existing = await loadAccount();
   if (existing && getArtifactStore()) throw new AuthError('exists', { nickname: existing.nickname });
@@ -160,8 +168,7 @@ async function localVerify(nickname: string, check: (acc: LocalAccount) => Promi
 export async function signIn(nickname: string, pin: string): Promise<SessionInfo> {
   nickname = normalizeNickname(nickname);
   if (remoteMode) {
-    const r = await callAuth<{ session: RemoteSession; userId: string; nickname: string }>('login', { nickname, pin });
-    return adoptRemote(r.session, r.nickname, r.userId);
+    return adoptRemote(await rpc<RemoteLogin>('bisje_login', { p_nickname: nickname, p_pin: pin }));
   }
   const acc = await localVerify(nickname, async (a) => (await kdf(pin, a.salt)) === a.pinHash);
   const info: SessionInfo = { nickname: acc.nickname, userId: localUserId() };
@@ -174,10 +181,7 @@ export async function resetWithCode(nickname: string, code: string, newPin: stri
   if (!isPin(newPin)) throw new AuthError('pin');
   nickname = normalizeNickname(nickname);
   if (remoteMode) {
-    const r = await callAuth<{ session: RemoteSession; userId: string; nickname: string; recoveryCode: string }>(
-      'reset_with_code', { nickname, code: normalizeCode(code), newPin },
-    );
-    return adoptRemote(r.session, r.nickname, r.userId, r.recoveryCode);
+    return adoptRemote(await rpc<RemoteLogin>('bisje_reset', { p_nickname: nickname, p_code: normalizeCode(code), p_new_pin: newPin }));
   }
   const acc = await localVerify(nickname, async (a) => (await kdf(normalizeCode(code), a.salt)) === a.recoveryHash);
   const salt = randomHex();
@@ -190,17 +194,11 @@ export async function resetWithCode(nickname: string, code: string, newPin: stri
   return info;
 }
 
-async function accessToken() {
-  const { data } = await supabase!.auth.getSession();
-  if (!data.session) throw new AuthError('session');
-  return data.session.access_token;
-}
-
-/** 로그인된 상태에서 PIN 변경 (이메일 재설정 링크로 들어온 경우 포함) */
+/** 로그인된 상태에서 비밀번호 변경 */
 export async function setPin(newPin: string) {
   if (!isPin(newPin)) throw new AuthError('pin');
   if (remoteMode) {
-    await callAuth('set_pin', { newPin }, await accessToken());
+    await rpc('bisje_set_pin', { p_token: await token(), p_new_pin: newPin });
     return;
   }
   const acc = await loadAccount();
@@ -211,7 +209,7 @@ export async function setPin(newPin: string) {
 export async function regenerateRecoveryCode(): Promise<string> {
   let code: string;
   if (remoteMode) {
-    code = (await callAuth<{ recoveryCode: string }>('regen_recovery', {}, await accessToken())).recoveryCode;
+    code = (await rpc<{ recoveryCode: string }>('bisje_regen_recovery', { p_token: await token() })).recoveryCode;
   } else {
     const acc = await loadAccount();
     if (!acc) throw new AuthError('session');
@@ -223,38 +221,10 @@ export async function regenerateRecoveryCode(): Promise<string> {
   return code;
 }
 
-export async function linkEmail(email: string) {
-  if (!supabase) throw new AuthError('local');
-  const { error } = await supabase.auth.updateUser({ email }, { emailRedirectTo: location.origin });
-  if (error) throw new AuthError('email', { message: error.message });
-}
-
-export async function linkedEmail(): Promise<string | null> {
-  if (!supabase) return null;
-  const { data } = await supabase.auth.getUser();
-  const e = data.user?.email ?? '';
-  return e.endsWith('@users.bisje.example.com') ? null : e || null;
-}
-
-export async function requestEmailReset(email: string) {
-  if (!supabase) throw new AuthError('local');
-  const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: location.origin });
-  if (error) throw new AuthError('email', { message: error.message });
-}
-
-/** 이메일 재설정 링크로 들어온 경우: 세션 정보를 서버에서 다시 받아 둔다 */
-export async function adoptRecoverySession(): Promise<SessionInfo | undefined> {
-  if (!supabase) return undefined;
-  const r = await callAuth<{ userId: string; nickname: string }>('whoami', {}, await accessToken());
-  const info: SessionInfo = { nickname: r.nickname, userId: r.userId };
-  await setMeta('session', info);
-  return info;
-}
-
 export async function signOut() {
   if (remoteMode) {
     await flushSync().catch(() => undefined);
-    await supabase!.auth.signOut().catch(() => undefined);
+    await rpc('bisje_logout', { p_token: await token() }).catch(() => undefined);
     await clearLocalData();
   } else if (getArtifactStore()) {
     // claude.ai 계정에 저장돼 있으므로 이 브라우저의 사본은 지운다 (다시 로그인하면 불러옴)
@@ -292,7 +262,7 @@ export function authErrorMessage(e: unknown): string {
         : `이 브라우저에 가입된 닉네임은 ‘${String(e.data.nickname)}’이에요. 그 닉네임으로 로그인해 주세요.`;
     case 'exists':
       return `이 claude.ai 계정에는 이미 ‘${String(e.data.nickname)}’ 계정이 있어요. 로그인해 주세요.`;
-    case 'email': return String(e.data.message ?? '이메일을 확인해 주세요');
+    case 'session': return '로그인이 끝났어요. 다시 로그인해 주세요.';
     case 'local': return '서버에 연결된 경우에만 사용할 수 있어요';
     default: return '문제가 생겼어요. 잠시 후 다시 시도해 주세요.';
   }

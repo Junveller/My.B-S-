@@ -30,6 +30,26 @@ let started = false;
 const PULL_OVERLAP_MS = 5000;
 const PAGE = 1000;
 
+/** 서버가 로그인 토큰을 거절하면(다른 기기에서 비밀번호 재설정 등) 앱이 로그인 화면으로 돌아간다 */
+const expiredListeners = new Set<() => void>();
+export function onSessionExpired(fn: () => void) {
+  expiredListeners.add(fn);
+  return () => expiredListeners.delete(fn);
+}
+
+async function sessionToken() {
+  return (await getMeta<{ token?: string }>('session'))?.token;
+}
+
+async function call<T>(fn: string, args: Record<string, unknown>): Promise<T> {
+  const { data, error } = await supabase!.rpc(fn, args);
+  if (error) {
+    if (error.message === 'session') expiredListeners.forEach((f) => f());
+    throw error;
+  }
+  return data as T;
+}
+
 async function push() {
   for (const t of SYNC_TABLES) {
     const rows = await table(t).where('dirty').equals(1).toArray();
@@ -38,8 +58,7 @@ async function push() {
       const items = chunk.map(({ dirty: _d, ...data }) => ({
         tbl: t, id: data.id, data, updated_at: data.updatedAt, deleted: !!data.deleted,
       }));
-      const { error } = await supabase!.rpc('push_records', { items });
-      if (error) throw error;
+      await call('bisje_push', { p_token: await sessionToken(), p_items: items });
       // 그 사이 다시 바뀐 항목은 dirty 유지
       await db.transaction('rw', table(t), async () => {
         for (const r of chunk) {
@@ -55,13 +74,9 @@ async function pull() {
   let cursor = (await getMeta<string>('syncCursor')) ?? '1970-01-01T00:00:00Z';
   for (;;) {
     const since = new Date(new Date(cursor).getTime() - PULL_OVERLAP_MS).toISOString();
-    const { data, error } = await supabase!
-      .from('records')
-      .select('tbl,id,data,updated_at,server_updated_at')
-      .gt('server_updated_at', since)
-      .order('server_updated_at')
-      .limit(PAGE);
-    if (error) throw error;
+    const data = await call<{ tbl: string; id: string; data: Record<string, unknown>; updated_at: number; server_updated_at: string }[]>(
+      'bisje_pull', { p_token: await sessionToken(), p_since: since },
+    );
     if (!data.length) break;
     await db.transaction('rw', SYNC_TABLES.map((t) => table(t)), async () => {
       for (const r of data) {
@@ -167,8 +182,7 @@ async function runArtifact() {
 async function runOnce() {
   if (getArtifactStore()) return runArtifact();
   if (!supabase) return;
-  const { data } = await supabase.auth.getSession();
-  if (!data.session) return;
+  if (!(await sessionToken())) return;
   if (!navigator.onLine) {
     setStatus('offline');
     return;
