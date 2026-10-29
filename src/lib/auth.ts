@@ -3,6 +3,7 @@ import { clearLocalData } from './data';
 import { isPin, kdf, makeRecoveryCode, normalizeCode, randomHex } from './crypto';
 import { AuthError, callAuth, remoteMode, supabase } from './supabase';
 import { flushSync, resetSyncState } from './sync';
+import { getArtifactStore } from './artifactStore';
 
 export interface SessionInfo {
   nickname: string;
@@ -21,12 +22,61 @@ interface LocalAccount {
   lockUntil: number;
 }
 
+/** 계정과 데이터를 어디에 두는지: 서버(Supabase) / claude.ai 계정(페이지 저장소) / 이 브라우저 */
+export type StorageMode = 'server' | 'claude' | 'local';
+export const storageMode = (): StorageMode => (remoteMode ? 'server' : getArtifactStore() ? 'claude' : 'local');
+/** 서버나 claude.ai 계정처럼 이 브라우저 밖에 저장되는 경우 */
+export const syncedMode = () => storageMode() !== 'local';
+
+/**
+ * 로컬 계정 읽기/쓰기. claude.ai 페이지에서는 보는 사람의 claude.ai 계정 비공개 영역에 두어
+ * 다른 브라우저·기기에서도 같은 닉네임과 비밀번호로 로그인된다.
+ */
+async function loadAccount(): Promise<LocalAccount | undefined> {
+  const st = getArtifactStore();
+  const local = await getMeta<LocalAccount>('account');
+  if (!st) return local;
+  const snap = await st.account.get();
+  if (snap.exists) {
+    const acc = snap.data() as unknown as LocalAccount;
+    await setMeta('account', acc);
+    return acc;
+  }
+  // 이전 버전(이 브라우저에만 저장)에서 만든 계정이면 claude.ai 계정으로 올려 둔다
+  if (local) await st.account.set({ ...local });
+  return local;
+}
+
+async function saveAccount(acc: LocalAccount) {
+  await setMeta('account', acc);
+  const st = getArtifactStore();
+  if (st) await st.account.set({ ...acc });
+}
+
+/** claude.ai 페이지: 이 브라우저에 있던 계정을 claude.ai 계정으로 옮긴다 (시작할 때 한 번) */
+export async function linkAccountToStore() {
+  if (getArtifactStore()) await loadAccount().catch(() => undefined);
+}
+
+const localUserId = () => getArtifactStore()?.uid ?? 'local';
+
 const MAX_TRIES = 5;
 const lockMs = (lockCount: number) => Math.min(10 * 60_000 * 2 ** lockCount, 24 * 3600_000);
 
 export async function currentSession(): Promise<SessionInfo | undefined> {
   const s = await getMeta<SessionInfo>('session');
   if (!s) return undefined;
+  const st = getArtifactStore();
+  if (st && s.userId !== st.uid) {
+    if (s.userId !== 'local') {
+      // 이 브라우저에 다른 claude.ai 계정의 데이터가 남아 있으면 지우고 다시 로그인
+      await clearLocalData();
+      return undefined;
+    }
+    const adopted = { ...s, userId: st.uid };
+    await setMeta('session', adopted);
+    return adopted;
+  }
   if (supabase) {
     const { data } = await supabase.auth.getSession();
     if (!data.session) return undefined;
@@ -64,7 +114,8 @@ export async function signUp(nickname: string, pin: string): Promise<SessionInfo
     const r = await callAuth<{ session: RemoteSession; userId: string; recoveryCode: string }>('signup', { nickname, pin });
     return adoptRemote(r.session, nickname, r.userId, r.recoveryCode);
   }
-  const existing = await getMeta<LocalAccount>('account');
+  const existing = await loadAccount();
+  if (existing && getArtifactStore()) throw new AuthError('exists', { nickname: existing.nickname });
   if (existing && nicknameKey(existing.nickname) === nicknameKey(nickname)) throw new AuthError('taken');
   if (existing) await clearLocalData();
   const salt = randomHex();
@@ -73,28 +124,30 @@ export async function signUp(nickname: string, pin: string): Promise<SessionInfo
     nickname, salt, pinHash: await kdf(pin, salt), recoveryHash: await kdf(normalizeCode(code), salt),
     failed: 0, lockCount: 0, lockUntil: 0,
   };
-  await setMeta('account', acc);
-  const info: SessionInfo = { nickname, userId: 'local', recoveryCode: code };
+  await saveAccount(acc);
+  const info: SessionInfo = { nickname, userId: localUserId(), recoveryCode: code };
   await setMeta('session', info);
   return info;
 }
 
 /** 로컬 모드 잠금 처리 (서버 모드는 서버에서 강제) */
 async function localVerify(nickname: string, check: (acc: LocalAccount) => Promise<boolean>) {
-  const acc = await getMeta<LocalAccount>('account');
-  if (!acc || nicknameKey(acc.nickname) !== nicknameKey(nickname)) throw new AuthError('invalid', { remaining: MAX_TRIES });
+  const acc = await loadAccount();
+  // 가입 기록이 없는 경우는 비밀번호가 틀린 것과 구분해서 알려 준다
+  if (!acc) throw new AuthError('no_account');
+  if (nicknameKey(acc.nickname) !== nicknameKey(nickname)) throw new AuthError('other_nickname', { nickname: acc.nickname });
   if (acc.lockUntil > Date.now()) throw new AuthError('locked', { lockedUntil: acc.lockUntil });
   if (await check(acc)) {
-    await setMeta('account', { ...acc, failed: 0, lockCount: 0, lockUntil: 0 });
+    await saveAccount({ ...acc, failed: 0, lockCount: 0, lockUntil: 0 });
     return acc;
   }
   const failed = acc.failed + 1;
   if (failed >= MAX_TRIES) {
     const lockUntil = Date.now() + lockMs(acc.lockCount);
-    await setMeta('account', { ...acc, failed: 0, lockCount: acc.lockCount + 1, lockUntil });
+    await saveAccount({ ...acc, failed: 0, lockCount: acc.lockCount + 1, lockUntil });
     throw new AuthError('locked', { lockedUntil: lockUntil });
   }
-  await setMeta('account', { ...acc, failed });
+  await saveAccount({ ...acc, failed });
   throw new AuthError('invalid', { remaining: MAX_TRIES - failed });
 }
 
@@ -105,7 +158,7 @@ export async function signIn(nickname: string, pin: string): Promise<SessionInfo
     return adoptRemote(r.session, r.nickname, r.userId);
   }
   const acc = await localVerify(nickname, async (a) => (await kdf(pin, a.salt)) === a.pinHash);
-  const info: SessionInfo = { nickname: acc.nickname, userId: 'local' };
+  const info: SessionInfo = { nickname: acc.nickname, userId: localUserId() };
   await setMeta('session', info);
   return info;
 }
@@ -123,10 +176,10 @@ export async function resetWithCode(nickname: string, code: string, newPin: stri
   const acc = await localVerify(nickname, async (a) => (await kdf(normalizeCode(code), a.salt)) === a.recoveryHash);
   const salt = randomHex();
   const next = makeRecoveryCode();
-  await setMeta('account', {
+  await saveAccount({
     ...acc, salt, pinHash: await kdf(newPin, salt), recoveryHash: await kdf(normalizeCode(next), salt),
   });
-  const info: SessionInfo = { nickname: acc.nickname, userId: 'local', recoveryCode: next };
+  const info: SessionInfo = { nickname: acc.nickname, userId: localUserId(), recoveryCode: next };
   await setMeta('session', info);
   return info;
 }
@@ -144,9 +197,9 @@ export async function setPin(newPin: string) {
     await callAuth('set_pin', { newPin }, await accessToken());
     return;
   }
-  const acc = await getMeta<LocalAccount>('account');
+  const acc = await loadAccount();
   if (!acc) throw new AuthError('session');
-  await setMeta('account', { ...acc, pinHash: await kdf(newPin, acc.salt), failed: 0, lockUntil: 0 });
+  await saveAccount({ ...acc, pinHash: await kdf(newPin, acc.salt), failed: 0, lockUntil: 0 });
 }
 
 export async function regenerateRecoveryCode(): Promise<string> {
@@ -154,10 +207,10 @@ export async function regenerateRecoveryCode(): Promise<string> {
   if (remoteMode) {
     code = (await callAuth<{ recoveryCode: string }>('regen_recovery', {}, await accessToken())).recoveryCode;
   } else {
-    const acc = await getMeta<LocalAccount>('account');
+    const acc = await loadAccount();
     if (!acc) throw new AuthError('session');
     code = makeRecoveryCode();
-    await setMeta('account', { ...acc, recoveryHash: await kdf(normalizeCode(code), acc.salt) });
+    await saveAccount({ ...acc, recoveryHash: await kdf(normalizeCode(code), acc.salt) });
   }
   const s = await getMeta<SessionInfo>('session');
   if (s) await setMeta('session', { ...s, recoveryCode: code });
@@ -197,6 +250,10 @@ export async function signOut() {
     await flushSync().catch(() => undefined);
     await supabase!.auth.signOut().catch(() => undefined);
     await clearLocalData();
+  } else if (getArtifactStore()) {
+    // claude.ai 계정에 저장돼 있으므로 이 브라우저의 사본은 지운다 (다시 로그인하면 불러옴)
+    await flushSync().catch(() => undefined);
+    await clearLocalData();
   } else {
     // 로컬 모드: 데이터는 이 기기에만 있으므로 지우지 않고 세션만 끝낸다
     await delMeta('session');
@@ -219,6 +276,16 @@ export function authErrorMessage(e: unknown): string {
       const mins = Math.max(1, Math.ceil((until - Date.now()) / 60_000));
       return `5번 틀려서 잠겼어요. ${mins}분 후에 다시 시도해 주세요.`;
     }
+    case 'no_account':
+      return storageMode() === 'claude'
+        ? '이 claude.ai 계정으로 가입한 기록이 없어요. ‘처음이에요’에서 가입해 주세요.'
+        : '이 브라우저에는 가입 기록이 없어요. 서버가 연결되지 않아 계정은 가입한 브라우저에만 있어요. 가입했던 브라우저에서 열거나, 여기서 새로 가입해 주세요.';
+    case 'other_nickname':
+      return storageMode() === 'claude'
+        ? `이 claude.ai 계정의 닉네임은 ‘${String(e.data.nickname)}’이에요. 그 닉네임으로 로그인해 주세요.`
+        : `이 브라우저에 가입된 닉네임은 ‘${String(e.data.nickname)}’이에요. 그 닉네임으로 로그인해 주세요.`;
+    case 'exists':
+      return `이 claude.ai 계정에는 이미 ‘${String(e.data.nickname)}’ 계정이 있어요. 로그인해 주세요.`;
     case 'email': return String(e.data.message ?? '이메일을 확인해 주세요');
     case 'local': return '서버에 연결된 경우에만 사용할 수 있어요';
     default: return '문제가 생겼어요. 잠시 후 다시 시도해 주세요.';

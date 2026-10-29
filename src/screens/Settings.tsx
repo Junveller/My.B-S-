@@ -4,10 +4,11 @@ import { saveSettings } from '../lib/data';
 import { askConfirm } from '../components/confirm';
 import { useApp } from '../lib/hooks';
 import {
-  authErrorMessage, linkedEmail, linkEmail, regenerateRecoveryCode, setPin, signOut,
+  authErrorMessage, linkedEmail, linkEmail, regenerateRecoveryCode, setPin, signOut, storageMode, syncedMode,
 } from '../lib/auth';
 import { getSyncStatus, onSyncStatus, syncNow, type SyncStatus } from '../lib/sync';
 import { remoteMode } from '../lib/supabase';
+import { artifactBuild } from '../lib/artifactStore';
 import { isPin } from '../lib/crypto';
 import type { ScreenKey, Sections } from '../lib/types';
 
@@ -101,7 +102,7 @@ const START_OPTIONS: { value: ScreenKey; label: string }[] = [
 ];
 
 const SYNC_LABEL: Record<SyncStatus, string> = {
-  local: '이 기기에만 저장 중 (서버 미설정)',
+  local: '이 브라우저에만 저장 중 (서버 미설정)',
   idle: '동기화됨',
   syncing: '동기화 중…',
   offline: '오프라인 · 연결되면 자동으로 동기화해요',
@@ -136,7 +137,12 @@ export function SettingsScreen({ embedded }: { embedded?: boolean }) {
   };
 
   const logout = async () => {
-    if (!(await askConfirm(remoteMode ? '로그아웃할까요? 다시 로그인하면 서버에서 데이터를 불러와요.' : '로그아웃할까요? 데이터는 이 기기에 남아 있어요.', { okLabel: '로그아웃', danger: true }))) return;
+    const msg = {
+      server: '로그아웃할까요? 다시 로그인하면 서버에서 데이터를 불러와요.',
+      claude: '로그아웃할까요? 데이터는 claude.ai 계정에 남아 있고, 다시 로그인하면 불러와요.',
+      local: '로그아웃할까요? 데이터는 이 브라우저에 남아 있어요.',
+    }[storageMode()];
+    if (!(await askConfirm(msg, { okLabel: '로그아웃', danger: true }))) return;
     await signOut();
     setSession(undefined);
   };
@@ -182,10 +188,11 @@ export function SettingsScreen({ embedded }: { embedded?: boolean }) {
 
         <h3 className="section-title">저장 · 동기화</h3>
         <div className="card list">
-          <Row label="상태" sub={SYNC_LABEL[sync]}>
-            {remoteMode && <button type="button" className="btn soft small" onClick={() => syncNow()}>지금 동기화</button>}
+          <Row label="상태" sub={storageMode() === 'claude' && sync !== 'error' && sync !== 'offline'
+            ? `${SYNC_LABEL[sync]} · claude.ai 계정에 저장` : SYNC_LABEL[sync]}>
+            {syncedMode() && <button type="button" className="btn soft small" onClick={() => syncNow()}>지금 동기화</button>}
           </Row>
-          {!standalone && (
+          {!standalone && !artifactBuild && (
             <Row label="홈 화면에 추가하기"
               sub="Safari 공유 버튼 → ‘홈 화면에 추가’. 오래 안 쓰면 Safari가 사이트 데이터를 지울 수 있어서 홈 화면 추가를 권장해요." />
           )}

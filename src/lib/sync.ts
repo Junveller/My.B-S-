@@ -1,6 +1,7 @@
 import { db, getMeta, setMeta, SYNC_TABLES, table, type SyncTable } from './db';
 import { onLocalChange } from './data';
 import { supabase } from './supabase';
+import { getArtifactStore, type QuerySnap } from './artifactStore';
 
 /**
  * 서버 동기화
@@ -78,7 +79,93 @@ async function pull() {
   }
 }
 
+/* ---------- claude.ai 페이지 저장소 ---------- */
+
+/** 저장소에 있는 항목의 최종 수정 시각 (push 때 더 새 것을 덮어쓰지 않으려고) */
+const remoteUpdatedAt = new Map<string, number>();
+let firstSnapshot: Promise<void> | null = null;
+let unsubscribe: (() => void) | null = null;
+const itemKey = (t: string, id: string) => `${t}~${id}`;
+
+async function applyRemote(snap: QuerySnap) {
+  const changes = snap.docChanges().filter((c) => c.type !== 'removed');
+  if (!changes.length) return;
+  await db.transaction('rw', SYNC_TABLES.map((t) => table(t)), async () => {
+    for (const c of changes) {
+      const body = c.doc.data() as { tbl?: string; updatedAt?: number; data?: Record<string, unknown> } | undefined;
+      if (!body?.tbl || !body.data || !(SYNC_TABLES as readonly string[]).includes(body.tbl)) continue;
+      const at = Number(body.updatedAt) || 0;
+      remoteUpdatedAt.set(c.doc.id, at);
+      const t = table(body.tbl as SyncTable);
+      const cur = await t.get(body.data.id as string);
+      if (!cur || cur.updatedAt < at) await t.put({ ...body.data, dirty: 0 });
+    }
+  });
+}
+
+/** 다른 기기의 변경을 실시간으로 받는다 (처음 한 번 전체를 받은 뒤 resolve) */
+function subscribeArtifact() {
+  const st = getArtifactStore()!;
+  firstSnapshot = new Promise<void>((resolve) => {
+    const timeout = setTimeout(resolve, 8000);
+    unsubscribe = st.items.onSnapshot(
+      (snap) => {
+        applyRemote(snap)
+          .catch((e) => console.warn('apply failed', e))
+          .finally(() => {
+            if (!snap.metadata.fromCache) {
+              clearTimeout(timeout);
+              resolve();
+            }
+          });
+      },
+      (e) => {
+        console.warn('store subscription ended', e);
+        clearTimeout(timeout);
+        setStatus('error');
+        resolve();
+      },
+    );
+  });
+}
+
+async function pushArtifact() {
+  const st = getArtifactStore()!;
+  for (const t of SYNC_TABLES) {
+    const rows = await table(t).where('dirty').equals(1).toArray();
+    for (const r of rows) {
+      const key = itemKey(t, r.id);
+      const { dirty: _d, ...data } = r;
+      if ((remoteUpdatedAt.get(key) ?? -1) < r.updatedAt) {
+        await st.items.doc(key).set({ tbl: t, updatedAt: r.updatedAt, deleted: !!r.deleted, data });
+        remoteUpdatedAt.set(key, r.updatedAt);
+      }
+      const cur = await table(t).get(r.id);
+      if (cur && cur.updatedAt === r.updatedAt) await table(t).update(r.id, { dirty: 0 });
+    }
+  }
+}
+
+async function runArtifact() {
+  if (!firstSnapshot) subscribeArtifact();
+  setStatus('syncing');
+  try {
+    await firstSnapshot;
+    // 이전 버전에서 이 브라우저에만 저장했던 데이터를 처음 한 번 올린다
+    if (!(await getMeta<boolean>('storeLinked'))) {
+      for (const t of SYNC_TABLES) await table(t).toCollection().modify({ dirty: 1 });
+      await setMeta('storeLinked', true);
+    }
+    await pushArtifact();
+    setStatus('idle');
+  } catch (e) {
+    console.warn('sync failed', e);
+    setStatus(navigator.onLine ? 'error' : 'offline');
+  }
+}
+
 async function runOnce() {
+  if (getArtifactStore()) return runArtifact();
   if (!supabase) return;
   const { data } = await supabase.auth.getSession();
   if (!data.session) return;
@@ -98,7 +185,7 @@ async function runOnce() {
 }
 
 export function syncNow(): Promise<void> {
-  if (!supabase) return Promise.resolve();
+  if (!supabase && !getArtifactStore()) return Promise.resolve();
   if (running) {
     again = true;
     return running;
@@ -119,13 +206,19 @@ export async function flushSync() {
   await syncNow();
 }
 
+/** 로그아웃: 다시 로그인하면 저장소 전체를 처음부터 받도록 구독을 끊는다 */
 export function resetSyncState() {
   clearTimeout(timer);
+  unsubscribe?.();
+  unsubscribe = null;
+  firstSnapshot = null;
+  remoteUpdatedAt.clear();
 }
 
 export function startSync() {
-  if (!supabase || started) return;
+  if ((!supabase && !getArtifactStore()) || started) return;
   started = true;
+  setStatus('idle');
   onLocalChange(() => {
     clearTimeout(timer);
     timer = setTimeout(syncNow, 1500);

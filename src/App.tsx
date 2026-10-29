@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppContext, useApp, useMediaQuery, useSettingsRaw, type AppCtx } from './lib/hooks';
-import { adoptRecoverySession, currentSession, type SessionInfo } from './lib/auth';
+import { adoptRecoverySession, currentSession, linkAccountToStore, type SessionInfo } from './lib/auth';
+import { initArtifactStore } from './lib/artifactStore';
 import { seedIfEmpty } from './lib/data';
 import { setMeta } from './lib/db';
 import { startSync, syncNow } from './lib/sync';
@@ -18,6 +19,7 @@ import type { ScreenKey, Settings } from './lib/types';
 import { logicalToday } from './lib/time';
 
 async function prepare(s: SessionInfo) {
+  await linkAccountToStore();
   startSync();
   await syncNow(); // 새 기기면 서버 데이터를 먼저 받아서 기본 데이터가 중복되지 않게
   await seedIfEmpty(s.nickname);
@@ -46,7 +48,7 @@ export default function App() {
         });
       }
     });
-    currentSession().then(async (s) => {
+    initArtifactStore().then(currentSession).then(async (s) => {
       if (s) await prepare(s);
       setSessionState(s);
       setBooting(false);

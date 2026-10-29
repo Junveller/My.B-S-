@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { Field, Segmented, TitleBar } from '../components/ui';
 import { PinInput } from './Settings';
 import {
-  authErrorMessage, requestEmailReset, resetWithCode, setPin, signIn, signUp, type SessionInfo,
+  authErrorMessage, requestEmailReset, resetWithCode, setPin, signIn, signUp, storageMode, type SessionInfo,
 } from '../lib/auth';
 import { isPin } from '../lib/crypto';
 
@@ -134,9 +134,11 @@ export function AuthScreen({ onAuthed }: { onAuthed: (s: SessionInfo, isNew: boo
             <button type="button" className="btn ghost wide" onClick={() => switchTo('login')}>로그인으로 돌아가기</button>
           </>
         )}
-        {!remoteMode && (
-          <p className="muted small center">서버가 설정되지 않아 이 기기에만 저장돼요.</p>
-        )}
+        <p className="muted small center">
+          {storageMode() === 'server' && '같은 닉네임으로 로그인하면 어느 기기에서나 같은 데이터를 써요.'}
+          {storageMode() === 'claude' && 'claude.ai 계정에 저장돼요. 같은 claude.ai 계정이면 다른 브라우저·기기에서도 이 닉네임과 비밀번호로 열려요.'}
+          {storageMode() === 'local' && '서버가 연결되지 않아 이 브라우저에만 저장돼요. 다른 브라우저에서는 이 계정이 보이지 않아요.'}
+        </p>
       </div>
     </div>
   );
