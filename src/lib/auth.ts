@@ -3,7 +3,7 @@ import { clearLocalData } from './data';
 import { isPin, kdf, makeRecoveryCode, normalizeCode, randomHex } from './crypto';
 import { AuthError, callAuth, remoteMode, supabase } from './supabase';
 import { flushSync, resetSyncState } from './sync';
-import { getArtifactStore } from './artifactStore';
+import { disableArtifactStore, getArtifactStore } from './artifactStore';
 
 export interface SessionInfo {
   nickname: string;
@@ -43,14 +43,20 @@ async function loadAccount(): Promise<LocalAccount | undefined> {
     return acc;
   }
   // 이전 버전(이 브라우저에만 저장)에서 만든 계정이면 claude.ai 계정으로 올려 둔다
-  if (local) await st.account.set({ ...local });
+  if (local) await saveAccount(local);
   return local;
 }
 
 async function saveAccount(acc: LocalAccount) {
   await setMeta('account', acc);
   const st = getArtifactStore();
-  if (st) await st.account.set({ ...acc });
+  if (!st) return;
+  try {
+    await st.account.set({ ...acc });
+  } catch (e) {
+    if ((e as { code?: string })?.code !== 'invalid_argument') throw e;
+    disableArtifactStore(); // 이 보기에는 쓰기 권한이 없다
+  }
 }
 
 /** claude.ai 페이지: 이 브라우저에 있던 계정을 claude.ai 계정으로 옮긴다 (시작할 때 한 번) */

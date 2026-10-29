@@ -30,6 +30,7 @@ interface DB {
 }
 interface UserNs {
   id(): Promise<string | null>;
+  can(capability: string): Promise<boolean | null>;
 }
 interface ClaudeGlobal {
   use(name: string): Promise<unknown>;
@@ -56,6 +57,8 @@ export function initArtifactStore(): Promise<ArtifactStore | null> {
     if (!db || !user) return null;
     const uid = await user.id();
     if (!uid) return null;
+    // 읽기만 허용된 보기(조직 밖에서 공유 링크로 연 경우 등)는 이 브라우저에만 저장한다
+    if ((await user.can('data.write').catch(() => null)) === false) return null;
     const base = `data/users/${uid}`;
     store = { uid, account: db.doc(`${base}/account`), items: db.collection(`${base}/sync/items`) };
     return store;
@@ -67,3 +70,8 @@ export function initArtifactStore(): Promise<ArtifactStore | null> {
 }
 
 export const getArtifactStore = () => store;
+
+/** 저장소 쓰기가 거절되면(권한 없음) 이번 방문은 이 브라우저에만 저장한다 */
+export function disableArtifactStore() {
+  store = null;
+}
