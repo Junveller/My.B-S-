@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
-import { AppTitle, Empty, Segmented } from '../components/ui';
-import { useApp, useBlocksBetween, useBundles, useCategories, useToday } from '../lib/hooks';
+import { AppTitle, Empty, ScreenHeading, Segmented } from '../components/ui';
+import { useBlocksBetween, useBundles, useCategories, useToday } from '../lib/hooks';
 import { colorOf } from '../lib/colors';
 import {
   addDays, fmtMinutes, monthRange, nextPayday, parseYmd, settlementRange, weekday, weekRange, won,
@@ -13,9 +13,8 @@ const minDate = (a: string, b: string) => (a < b ? a : b);
 const maxDate = (a: string, b: string) => (a > b ? a : b);
 
 export function StatsScreen({ embedded }: { embedded?: boolean }) {
-  const { settings } = useApp();
   const today = useToday();
-  const [period, setPeriod] = useState<Period>('week');
+  const [period, setPeriod] = useState<Period>('month');
   const [catFilter, setCatFilter] = useState<string | 'all'>('all');
   const categories = useCategories();
   const bundles = useBundles();
@@ -43,20 +42,21 @@ export function StatsScreen({ embedded }: { embedded?: boolean }) {
     totals.set(b.bundleId, t);
   }
   const maxTotal = Math.max(1, ...[...totals.values()].map((t) => Math.max(t.done, t.plan)));
-  const totalDone = [...totals.values()].reduce((s, t) => s + t.done, 0);
 
-  // 막대: 주 = 요일별, 월 = 주별 근무시간(수입 묶음)
+  // 막대: 이번 주 = 요일별, 이번 달 = 주별 근무시간 (수입 계산 묶음)
+  const workBlocks = periodBlocks.filter((b) => b.kind === 'done' && bundleMap.get(b.bundleId)?.income);
   const bars = period === 'week'
     ? Array.from({ length: 7 }, (_, i) => {
       const d = addDays(from, i);
-      const day = periodBlocks.filter((b) => b.date === d);
-      return { label: weekday(d), done: sum(day, 'done'), plan: sum(day, 'plan'), current: d === today };
+      return { label: weekday(d), done: workBlocks.filter((b) => b.date === d).reduce((s, b) => s + mins(b), 0), current: d === today };
     })
-    : monthWeeks(from, to).map(([s, e], i) => {
-      const wk = periodBlocks.filter((b) => b.date >= s && b.date <= e && bundleMap.get(b.bundleId)?.income);
-      return { label: `${i + 1}주`, done: sum(wk, 'done'), plan: sum(wk, 'plan'), current: today >= s && today <= e };
-    });
-  const maxBar = Math.max(60, ...bars.map((b) => Math.max(b.done, b.plan)));
+    : monthWeeks(from, to).map(([s, e], i) => ({
+      label: `${i + 1}주`,
+      done: workBlocks.filter((b) => b.date >= s && b.date <= e).reduce((s2, b) => s2 + mins(b), 0),
+      current: today >= s && today <= e,
+    }));
+  const maxBar = Math.max(60, ...bars.map((b) => b.done));
+  const barTotal = bars.reduce((s, b) => s + b.done, 0);
 
   // 알바 수입 (현재 정산기간)
   const jobs = incomeBundles.filter(inFilter).map((b) => {
@@ -64,94 +64,89 @@ export function StatsScreen({ embedded }: { embedded?: boolean }) {
     const mine = blocks.filter((x) => x.bundleId === b.id && x.date >= s && x.date <= e);
     let doneMin = 0;
     let planMin = 0;
-    const days = new Set(mine.map((x) => x.date));
-    for (const d of days) {
+    for (const d of new Set(mine.map((x) => x.date))) {
       const day = mine.filter((x) => x.date === d);
       const dm = sum(day, 'done');
       const pm = sum(day, 'plan');
       doneMin += dm;
       planMin += d < today ? dm : Math.max(dm, pm);
     }
-    return { b, s, e, doneMin, planMin, earned: (doneMin / 60) * b.wage, expected: (planMin / 60) * b.wage, pay: nextPayday(today, b.payday) };
+    return { b, s, e, doneMin, planMin, earned: (doneMin / 60) * b.wage, pay: nextPayday(today, b.payday) };
   });
   const earnedTotal = jobs.reduce((s, j) => s + j.earned, 0);
-  const expectedMax = Math.max(1, ...jobs.map((j) => j.expected));
+  const planMax = Math.max(1, ...jobs.map((j) => j.planMin));
+  const [, m] = today.split('-').map(Number);
 
   return (
     <div className="screen">
       {!embedded && <AppTitle />}
       <div className="screen-body">
-        {embedded && <h2 className="pane-title">통계</h2>}
-        <div className="stats-controls">
-          <Segmented label="기간" value={period} onChange={setPeriod}
-            options={[{ value: 'week', label: '이번 주' }, { value: 'month', label: '이번 달' }]} />
-          <div className="chips scroll" role="group" aria-label="카테고리 필터">
-            <button type="button" className={'chip' + (catFilter === 'all' ? ' on' : '')} aria-pressed={catFilter === 'all'}
-              onClick={() => setCatFilter('all')}>전체</button>
-            {categories.map((c) => (
-              <button key={c.id} type="button" className={'chip' + (catFilter === c.id ? ' on' : '')} aria-pressed={catFilter === c.id}
-                onClick={() => setCatFilter(c.id)}>
-                <span className="dot" style={{ background: colorOf(c.color).strong }} />{c.name}
-              </button>
-            ))}
-          </div>
+        {!embedded && <ScreenHeading>통계</ScreenHeading>}
+        <Segmented label="기간" value={period} onChange={setPeriod}
+          options={[{ value: 'week', label: '이번 주' }, { value: 'month', label: '이번 달' }]} />
+        <div className="chips scroll" role="group" aria-label="카테고리 필터">
+          <button type="button" className={'chip lg' + (catFilter === 'all' ? ' on' : '')} aria-pressed={catFilter === 'all'}
+            onClick={() => setCatFilter('all')}>전체</button>
+          {categories.map((c) => (
+            <button key={c.id} type="button" className={'chip lg' + (catFilter === c.id ? ' on' : '')} aria-pressed={catFilter === c.id}
+              onClick={() => setCatFilter(c.id)}>{c.name}</button>
+          ))}
         </div>
 
         {jobs.length > 0 && (
-          <section className="card" aria-labelledby="job-title">
-            <h3 className="card-title" id="job-title">알바로 지금까지 모인 돈</h3>
-            <p className="money">{won(earnedTotal)}</p>
-            <p className="muted small">현재 정산기간 · DONE 기준 (주휴수당·세금 제외)</p>
-            <ul className="job-list">
-              {jobs.map((j) => (
-                <li key={j.b.id}>
+          <>
+            <section className="hero" aria-label="알바로 지금까지 모인 돈">
+              <span className="hero-label">알바로 지금까지 모인 돈</span>
+              <strong className="hero-value">{won(earnedTotal)}</strong>
+              <span className="hero-label">{jobs.map((j) => `${j.b.name} ${short(j.pay.date)}`).join(' · ')} 지급 예정</span>
+            </section>
+            {jobs.map((j) => {
+              const c = colorOf(j.b.color);
+              return (
+                <section key={j.b.id} className="card job" aria-label={`${j.b.name} 수입`}>
                   <div className="job-head">
-                    <span className="dot" style={{ background: colorOf(j.b.color).strong }} />
+                    <span className="dot md" style={{ background: c.strong }} />
                     <strong>{j.b.name}</strong>
-                    <span className="tag accent">월급날 {j.pay.dday === 0 ? 'D-Day' : `D-${j.pay.dday}`}</span>
+                    <span className="muted xsmall">시급 {j.b.wage.toLocaleString('ko-KR')}원</span>
                     <span className="spacer" />
-                    <strong>{won(j.earned)}</strong>
+                    <strong className="job-amount">{won(j.earned)}</strong>
                   </div>
-                  <div className="dual-bar" aria-hidden="true">
-                    <span className="plan" style={{ width: `${(j.expected / expectedMax) * 100}%` }} />
-                    <span className="done" style={{ width: `${(j.earned / expectedMax) * 100}%`, background: colorOf(j.b.color).strong }} />
+                  <span className="muted small">월급날 {short(j.pay.date)} · {j.pay.dday === 0 ? 'D-Day' : `D-${j.pay.dday}`}</span>
+                  <div className="stack-bar thin" role="img"
+                    aria-label={`실제 ${fmtMinutes(j.doneMin)}, 계획 포함 ${fmtMinutes(j.planMin)}`}>
+                    <span style={{ width: `${(j.doneMin / planMax) * 100}%`, background: c.dark }} />
+                    <span style={{ width: `${((j.planMin - j.doneMin) / planMax) * 100}%`, background: c.light }} />
                   </div>
-                  <p className="muted small">
-                    실제 {fmtMinutes(j.doneMin)} · 계획 포함 {fmtMinutes(j.planMin)} → 예상 {won(j.expected)}
-                    <br />정산 {short(j.s)} ~ {short(j.e)} · 시급 {won(j.b.wage)} · 지급 {short(j.pay.date)}
-                  </p>
-                </li>
-              ))}
-            </ul>
-            <Legend />
-          </section>
+                  <div className="job-foot muted small">
+                    <span>실제 {fmtMinutes(j.doneMin)}</span>
+                    <span>계획 포함 {fmtMinutes(j.planMin)}</span>
+                  </div>
+                </section>
+              );
+            })}
+          </>
         )}
 
         <section className="card" aria-labelledby="bar-title">
           <div className="card-head">
-            <h3 className="card-title" id="bar-title">{period === 'week' ? '요일별 시간' : '주별 근무시간'}</h3>
-            <span className="muted small">{period === 'week' ? `${short(from)} ~ ${short(to)}` : '수입 계산 묶음'}</span>
+            <h3 className="card-title small-title" id="bar-title">{period === 'week' ? '이번 주 요일별 근무시간' : `${m}월 주별 근무시간`}</h3>
+            <span className="muted small">총 {fmtMinutes(barTotal)}</span>
           </div>
-          <div className="vbars" role="img"
-            aria-label={bars.map((b) => `${b.label} 실제 ${fmtMinutes(b.done)}, 계획 ${fmtMinutes(b.plan)}`).join('. ')}>
+          <div className="vbars" role="img" aria-label={bars.map((b) => `${b.label} ${fmtMinutes(b.done)}`).join(', ')}>
             {bars.map((b) => (
               <div key={b.label} className={'vbar' + (b.current ? ' current' : '')}>
-                <span className="vbar-value">{b.done ? (b.done / 60).toFixed(1) : ''}</span>
-                <div className="vbar-track">
-                  <span className="plan" style={{ height: `${(b.plan / maxBar) * 100}%` }} />
-                  <span className="done" style={{ height: `${(b.done / maxBar) * 100}%` }} />
-                </div>
+                <span className="vbar-value">{b.done ? `${+(b.done / 60).toFixed(1)}h` : ''}</span>
+                <div className="vbar-track"><span style={{ height: `${(b.done / maxBar) * 100}%` }} /></div>
                 <span className="vbar-label">{b.label}</span>
               </div>
             ))}
           </div>
-          <Legend />
         </section>
 
         <section className="card" aria-labelledby="sum-title">
           <div className="card-head">
-            <h3 className="card-title" id="sum-title">{period === 'week' ? '이번 주' : '이번 달'} 합계</h3>
-            <strong>{fmtMinutes(totalDone)}</strong>
+            <h3 className="card-title small-title" id="sum-title">{period === 'week' ? '이번 주' : '이번 달'} 묶음별 시간</h3>
+            <span className="muted small">실제 / 계획</span>
           </div>
           {totals.size === 0 && <Empty>아직 기록이 없어요. 시간표에서 DONE을 칠해 보세요.</Empty>}
           {categories.filter((c) => catFilter === 'all' || c.id === catFilter).map((c) => {
@@ -163,12 +158,13 @@ export function StatsScreen({ embedded }: { embedded?: boolean }) {
                 <div className="sum-cat"><span>{c.name}</span><span>{fmtMinutes(catDone)}</span></div>
                 {bs.map((b) => {
                   const t = totals.get(b.id)!;
+                  const col = colorOf(b.color);
                   return (
                     <div key={b.id} className="hbar-row">
                       <span className="hbar-name">{b.name}</span>
-                      <div className="dual-bar" aria-hidden="true">
-                        <span className="plan" style={{ width: `${(t.plan / maxTotal) * 100}%` }} />
-                        <span className="done" style={{ width: `${(t.done / maxTotal) * 100}%`, background: colorOf(b.color).strong }} />
+                      <div className="stack-bar thin" aria-hidden="true">
+                        <span style={{ width: `${(t.done / maxTotal) * 100}%`, background: col.dark }} />
+                        <span style={{ width: `${(Math.max(0, t.plan - t.done) / maxTotal) * 100}%`, background: col.light }} />
                       </div>
                       <span className="hbar-val">{fmtMinutes(t.done)}<span className="muted"> / {fmtMinutes(t.plan)}</span></span>
                     </div>
@@ -178,17 +174,7 @@ export function StatsScreen({ embedded }: { embedded?: boolean }) {
             );
           })}
         </section>
-        {!settings.sections.stats && <p className="muted small">통계 섹션은 설정에서 숨김 상태예요.</p>}
       </div>
-    </div>
-  );
-}
-
-function Legend() {
-  return (
-    <div className="legend">
-      <span><i className="sw done" /> 실제 (DONE)</span>
-      <span><i className="sw plan" /> 계획 (PLAN) 포함</span>
     </div>
   );
 }

@@ -49,6 +49,11 @@ export function fmtMinutes(mins: number) {
   return m ? `${h}시간 ${m}분` : `${h}시간`;
 }
 
+/** 26시간 / 3시간 30분 */
+export function fmtHours(mins: number) {
+  return fmtMinutes(mins);
+}
+
 export function fmtHM(mins: number) {
   return `${Math.floor(mins / 60)}:${pad(Math.round(mins % 60))}`;
 }
@@ -57,6 +62,16 @@ const WEEK = ['일', '월', '화', '수', '목', '금', '토'];
 export function fmtDateLong(s: string) {
   const d = parseYmd(s);
   return `${d.getMonth() + 1}월 ${d.getDate()}일 (${WEEK[d.getDay()]})`;
+}
+/** 2026년 10월 30일 금 */
+export function fmtDateFull(s: string) {
+  const d = parseYmd(s);
+  return `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일 ${WEEK[d.getDay()]}`;
+}
+/** 10/30 금 */
+export function fmtDateShort(s: string) {
+  const d = parseYmd(s);
+  return `${d.getMonth() + 1}/${d.getDate()} ${WEEK[d.getDay()]}`;
 }
 export function weekday(s: string) {
   return WEEK[parseYmd(s).getDay()];

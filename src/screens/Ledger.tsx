@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { AppTitle, Empty, Field, IconButton, Sheet } from '../components/ui';
+import { AppTitle, Empty, Field, IconButton, ScreenHeading, Sheet } from '../components/ui';
 import { Icon } from '../components/Icon';
 import { put, remove, saveSettings, uid } from '../lib/data';
 import { useApp, useExpenseCategories, useExpensesBetween, useLocalPref, usePaymentMethods } from '../lib/hooks';
-import { addMonths, fmtDateLong, ymd, won } from '../lib/time';
+import { addMonths, fmtDateLong, fmtDateShort, ymd, won } from '../lib/time';
 import type { Expense, ExpenseCategory, PaymentMethod } from '../lib/types';
 
 const MASK = '••••';
@@ -21,35 +21,78 @@ export function LedgerScreen({ embedded }: { embedded?: boolean }) {
   const list = useExpensesBetween(`${month}-01`, `${month}-31`);
 
   const filtered = search ? list.filter((e) => e.date === search) : list;
-  const total = filtered.reduce((s, e) => s + e.amount, 0);
-  const m = (n: number) => (hidden ? MASK : won(n));
+  const total = list.reduce((s, e) => s + e.amount, 0);
+  /** 가리기: 날짜별 지출 금액만 가린다 */
 
-  const byCat = cats.map((c) => ({ c, amount: filtered.filter((e) => e.categoryId === c.id).reduce((s, e) => s + e.amount, 0) }))
+  const byCat = cats.map((c) => ({ c, amount: list.filter((e) => e.categoryId === c.id).reduce((s, e) => s + e.amount, 0) }))
     .filter((x) => x.amount > 0).sort((a, b) => b.amount - a.amount);
-  const uncategorized = filtered.filter((e) => !cats.some((c) => c.id === e.categoryId)).reduce((s, e) => s + e.amount, 0);
-  const byMethod = methods.map((pm) => ({ pm, amount: filtered.filter((e) => e.methodId === pm.id).reduce((s, e) => s + e.amount, 0) }))
-    .filter((x) => x.amount > 0);
+  const uncategorized = list.filter((e) => !cats.some((c) => c.id === e.categoryId)).reduce((s, e) => s + e.amount, 0);
+  const byMethod = methods.map((pm) => ({ pm, amount: list.filter((e) => e.methodId === pm.id).reduce((s, e) => s + e.amount, 0) }));
   const days = [...new Set(filtered.map((e) => e.date))].sort().reverse();
-  const [y, mo] = month.split('-').map(Number);
+  const [, mo] = month.split('-').map(Number);
 
   return (
     <div className="screen">
       {!embedded && <AppTitle />}
       <div className="screen-body">
-        {embedded && <h2 className="pane-title">가계부</h2>}
-        <div className="date-nav">
-          <IconButton icon="left" label="이전 달" onClick={() => { setMonth(addMonths(month, -1)); setSearch(null); }} />
-          <span className="date-label">{y}년 {mo}월</span>
-          <IconButton icon="right" label="다음 달" onClick={() => { setMonth(addMonths(month, 1)); setSearch(null); }} />
-          <span className="spacer" />
-          <IconButton icon="search" label="날짜 검색" pressed={search !== null}
-            onClick={() => setSearch(search === null ? ymd(new Date()) : null)} />
-          {!embedded && (
-            <IconButton icon={hidden ? 'eyeOff' : 'eye'} label={hidden ? '금액 보이기' : '금액 가리기'} pressed={hidden}
-              onClick={() => setHidden(!hidden)} />
+        <ScreenHeading right={
+          <>
+            <IconButton icon="left" label="지난달" onClick={() => { setMonth(addMonths(month, -1)); setSearch(null); }} />
+            <span className="month-label">{mo}월</span>
+            <IconButton icon="right" label="다음달" onClick={() => { setMonth(addMonths(month, 1)); setSearch(null); }} />
+            <button type="button" className="fab" aria-label="지출 추가" onClick={() => setEdit({ date: search ?? ymd(new Date()) })}>
+              <span><Icon name="plus" size={20} stroke={2.4} /></span>
+            </button>
+          </>
+        }>{embedded ? '' : '가계부'}</ScreenHeading>
+
+        <section className="card" aria-label="이번 달 지출">
+          <span className="muted small">이번 달 지출</span>
+          <div className="total-line">
+            <strong className="money">{won(total)}</strong>
+            {settings.budget > 0 && <span className="budget">/ {won(settings.budget)}</span>}
+            <IconButton icon="pencil" label="이번 달 예산 수정" className="faint" onClick={() => setBudgetOpen(true)} />
+          </div>
+          {total > 0 && (
+            <>
+              <div className="stack-bar" role="img" aria-label={byCat.map((x) => `${x.c.name} ${won(x.amount)}`).join(', ')}>
+                {byCat.map((x) => <span key={x.c.id} style={{ width: `${(x.amount / total) * 100}%`, background: x.c.color }} />)}
+                {uncategorized > 0 && <span style={{ width: `${(uncategorized / total) * 100}%`, background: '#DCDCE0' }} />}
+              </div>
+              <ul className="cat-sums">
+                {byCat.map((x) => (
+                  <li key={x.c.id}>
+                    <span className="dot" style={{ background: x.c.color }} />
+                    <span className="grow">{x.c.name}</span>
+                    <span className="num">{won(x.amount)}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
           )}
-          <IconButton icon="plus" className="accent" label="지출 추가"
-            onClick={() => setEdit({ date: search ?? ymd(new Date()) })} />
+          <div className="method-tiles">
+            {byMethod.map((x) => (
+              <div key={x.pm.id} className="method-tile">
+                <span className="muted xsmall">{x.pm.name}</span>
+                <strong className="num">{won(x.amount)}</strong>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <div className="list-head">
+          <h3>날짜별 지출</h3>
+          <div className="list-head-actions">
+            <button type="button" className="btn outline small" aria-pressed={search !== null}
+              onClick={() => setSearch(search === null ? ymd(new Date()) : null)}>
+              <Icon name="search" size={16} /> 날짜 검색
+            </button>
+            {!embedded && (
+              <button type="button" className="btn outline small" aria-pressed={hidden} onClick={() => setHidden(!hidden)}>
+                <Icon name={hidden ? 'eye' : 'eyeOff'} size={16} /> {hidden ? '보이기' : '가리기'}
+              </button>
+            )}
+          </div>
         </div>
 
         {search !== null && (
@@ -66,45 +109,15 @@ export function LedgerScreen({ embedded }: { embedded?: boolean }) {
           </div>
         )}
 
-        <section className="card" aria-label="지출 합계">
-          <span className="muted small">{search ? fmtDateLong(search) : '이번 달'} 총 지출</span>
-          <div className="total-line">
-            <strong className="money">{m(total)}</strong>
-            {!search && settings.budget > 0 && <span className="budget">/ {m(settings.budget)}</span>}
-            <IconButton icon="pencil" label="월 예산 수정" className="faint" onClick={() => setBudgetOpen(true)} />
-          </div>
-          {total > 0 && (
-            <>
-              <div className="stack-bar" role="img" aria-label={byCat.map((x) => `${x.c.name} ${hidden ? '' : won(x.amount)}`).join(', ')}>
-                {byCat.map((x) => <span key={x.c.id} style={{ width: `${(x.amount / total) * 100}%`, background: x.c.color }} />)}
-                {uncategorized > 0 && <span style={{ width: `${(uncategorized / total) * 100}%`, background: '#DCDCE0' }} />}
-              </div>
-              <ul className="cat-sums">
-                {byCat.map((x) => (
-                  <li key={x.c.id}>
-                    <span className="dot" style={{ background: x.c.color }} />
-                    <span>{x.c.name}</span>
-                    <span className="spacer" />
-                    <span className="muted small">{Math.round((x.amount / total) * 100)}%</span>
-                    <strong>{m(x.amount)}</strong>
-                  </li>
-                ))}
-              </ul>
-              <div className="chips">
-                {byMethod.map((x) => <span key={x.pm.id} className="chip static">{x.pm.name} {m(x.amount)}</span>)}
-              </div>
-            </>
-          )}
-        </section>
-
         {days.length === 0 && <Empty>{search ? '이 날짜의 지출이 없어요.' : '이번 달 지출이 아직 없어요. + 를 눌러 추가해 보세요.'}</Empty>}
         {days.map((d) => {
           const items = filtered.filter((e) => e.date === d).sort((a, b) => b.updatedAt - a.updatedAt);
+          const dayTotal = items.reduce((s, e) => s + e.amount, 0);
           return (
             <section key={d} className="card day-card" aria-label={fmtDateLong(d)}>
-              <div className="card-head">
-                <h3 className="card-title">{fmtDateLong(d)}</h3>
-                <strong>{m(items.reduce((s, e) => s + e.amount, 0))}</strong>
+              <div className="day-head">
+                <span>{fmtDateShort(d)}</span>
+                <span className="num">{hidden ? MASK : `−${won(dayTotal)}`}</span>
               </div>
               <ul className="expense-list">
                 {items.map((e) => {
@@ -116,9 +129,9 @@ export function LedgerScreen({ embedded }: { embedded?: boolean }) {
                         <span className="dot" style={{ background: c?.color ?? '#DCDCE0' }} />
                         <span className="expense-text">
                           <span className="expense-name">{e.name}</span>
-                          <span className="muted small">{c?.name ?? '미분류'} · {pm?.name ?? '-'}</span>
+                          <span className="muted xsmall">{c?.name ?? '미분류'} · {pm?.name ?? '-'}</span>
                         </span>
-                        <strong>{m(e.amount)}</strong>
+                        <span className="num">{hidden ? MASK : `−${e.amount.toLocaleString('ko-KR')}`}</span>
                       </button>
                     </li>
                   );
@@ -180,11 +193,11 @@ function ExpenseSheet({ value, onClose, cats, methods }: {
       footer={
         <>
           {editing && (
-            <button type="button" className="btn danger-ghost" onClick={async () => { await remove('expenses', e.id!); onClose(); }}>
-              <Icon name="trash" size={18} /> 삭제
+            <button type="button" className="btn outline danger big del-btn" onClick={async () => { await remove('expenses', e.id!); onClose(); }}>
+              삭제
             </button>
           )}
-          <button type="button" className="btn primary grow" disabled={!valid} onClick={save}>저장</button>
+          <button type="button" className="btn primary big grow" disabled={!valid} onClick={save}>저장</button>
         </>
       }>
       <Field label="날짜">
@@ -240,7 +253,7 @@ function BudgetSheet({ open, value, onClose, onSave }: { open: boolean; value: n
   useEffect(() => setV(value), [value, open]);
   return (
     <Sheet open={open} onClose={onClose} title="월 예산"
-      footer={<button type="button" className="btn primary grow" onClick={() => { onSave(v); onClose(); }}>저장</button>}>
+      footer={<button type="button" className="btn primary big grow" onClick={() => { onSave(v); onClose(); }}>저장</button>}>
       <Field label="한 달 예산" hint="0으로 두면 표시하지 않아요">
         <span className="input-suffix wide">₩
           <input className="input num" inputMode="numeric" autoFocus value={v ? v.toLocaleString('ko-KR') : ''} placeholder="0"

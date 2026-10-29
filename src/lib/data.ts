@@ -66,14 +66,14 @@ export async function seedIfEmpty(nickname: string) {
   for (const c of [study, job, gym]) await put('categories', c);
   const b = (categoryId: string, name: string, color: Bundle['color'], order: number, extra: Partial<Bundle> = {}) =>
     put<Bundle>('bundles', {
-      id: uid(), categoryId, name, color, order, income: false, wage: 0, payday: 10, settleStart: 1, ...extra,
+      id: uid(), categoryId, name, color, order, income: false, wage: 0, payday: 10, settleStart: 11, ...extra,
     });
-  await b(study.id, '수학', 'blue', 0);
-  await b(study.id, '영어', 'purple', 1);
-  await b(job.id, '카페', 'yellow', 0, { income: true, wage: 10030, payday: 10 });
-  await b(job.id, '과외', 'orange', 1, { income: true, wage: 25000, payday: 25 });
-  await b(gym.id, '헬스', 'green', 0);
-  const cats = [['식비', '#E8A16A'], ['카페', '#F2DC7A'], ['교통', '#9DD0EA'], ['쇼핑', '#EBA2B9'], ['생활', '#7ACB98'], ['기타', '#B9B9C0']];
+  await b(study.id, '수학', 'yellow', 0);
+  await b(study.id, '영어', 'blue', 1);
+  await b(job.id, '카페', 'green', 0, { income: true, wage: 10030, payday: 10, settleStart: 11 });
+  await b(job.id, '과외', 'orange', 1, { income: true, wage: 25000, payday: 25, settleStart: 26 });
+  await b(gym.id, '헬스', 'pink', 0);
+  const cats = [['식비', '#E8895A'], ['교통', '#5FA8D3'], ['카페·간식', '#E3C94A'], ['쇼핑', '#B08BE0'], ['기타', '#A9A9B4']];
   for (const [i, [name, color]] of cats.entries()) await put<ExpenseCategory>('expenseCategories', { id: uid(), name, color, order: i });
   for (const [i, name] of ['카드', '현금', '모바일페이'].entries()) await put<PaymentMethod>('paymentMethods', { id: uid(), name, order: i });
   await saveSettings({ aggregate: { categoryIds: [study.id], bundleIds: [] } }, nickname);

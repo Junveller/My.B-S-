@@ -1,43 +1,55 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
-import { AppTitle, Checkbox, IconButton, Segmented, Sheet } from '../components/ui';
+import { AppTitle, Checkbox, DateCard, IconButton, Segmented, Sheet } from '../components/ui';
 import { Icon } from '../components/Icon';
 import { aggregateBundleIds, copyPlanToDone, saveSettings } from '../lib/data';
 import { useApp, useBlocksOn, useBundles, useCategories, useLocalPref, useNow } from '../lib/hooks';
 import { colorOf } from '../lib/colors';
-import { addDays, fmtDateLong, fmtHM, fmtMinutes, hourOfRow, logicalToday, nowSlot, SLOTS } from '../lib/time';
+import { addDays, fmtDateLong, fmtMinutes, hourOfRow, logicalToday, nowSlot, SLOTS, slotLabel, won } from '../lib/time';
 import type { Block, BlockKind } from '../lib/types';
 import { BlockSheet, type BlockDraft } from './BlockSheet';
 
 const ROWS = 24;
 const ROW_H = 20;
+const ROW_H_TABLET = 26;
 const ROW_H_ZOOM = 48;
 const LONG_PRESS_MS = 320;
 const MOVE_TOLERANCE = 8;
 
-interface Seg {
+interface Piece {
   key: string;
   row: number;
+  /** 세로로 이어지는 행 수 (꽉 찬 시간은 하나로 합쳐 그린다) */
+  rows: number;
   from: number;
   to: number;
   first: boolean;
 }
 
-/** [start, end) 칸 범위를 시간 행 단위 조각으로 나눈다 */
-function segments(key: string, start: number, end: number): Seg[] {
-  const out: Seg[] = [];
-  for (let r = Math.floor(start / 6); r * 6 < end; r++) {
-    const from = Math.max(start, r * 6) - r * 6;
-    const to = Math.min(end, r * 6 + 6) - r * 6;
-    out.push({ key: `${key}-${r}`, row: r, from, to, first: out.length === 0 });
+/** [start, end) 칸 범위를 그릴 조각으로 나눈다: 앞쪽 일부 행 / 꽉 찬 행 묶음 / 뒤쪽 일부 행 */
+function pieces(key: string, start: number, end: number): Piece[] {
+  const out: Piece[] = [];
+  const push = (row: number, rows: number, from: number, to: number) =>
+    out.push({ key: `${key}-${out.length}`, row, rows, from, to, first: out.length === 0 });
+  let s = start;
+  if (s % 6 !== 0 || end - s < 6) {
+    const r = Math.floor(s / 6);
+    const to = Math.min(end, (r + 1) * 6);
+    push(r, 1, s - r * 6, to - r * 6);
+    s = to;
   }
+  const full = Math.floor((end - s) / 6);
+  if (full > 0) {
+    push(s / 6, full, 0, 6);
+    s += full * 6;
+  }
+  if (s < end) push(s / 6, 1, 0, end - s);
   return out;
 }
 
 export function TimetableScreen({ embedded }: { embedded?: boolean }) {
-  const { settings, toast } = useApp();
+  const { settings, toast, tablet, date, setDate } = useApp();
   const now = useNow();
   const today = logicalToday(now);
-  const [date, setDate] = useState(today);
   const [kind, setKind] = useLocalPref<BlockKind>('bisje.kind', 'plan');
   const [zoom, setZoom] = useState(false);
   const [draft, setDraft] = useState<BlockDraft | null>(null);
@@ -50,33 +62,30 @@ export function TimetableScreen({ embedded }: { embedded?: boolean }) {
   const aggIds = useMemo(() => aggregateBundleIds(settings, bundles), [settings, bundles]);
   const aggMinutes = blocks.filter((b) => b.kind === 'done' && aggIds.has(b.bundleId)).reduce((s, b) => s + (b.end - b.start) * 10, 0);
 
-  const shown = blocks.filter((b) => b.kind === kind);
+  const shown = blocks.filter((b) => b.kind === kind).sort((a, b) => a.start - b.start);
   const ghost = blocks.filter((b) => b.kind !== kind);
-  const rowH = zoom ? ROW_H_ZOOM : ROW_H;
+  const rowH = zoom ? ROW_H_ZOOM : tablet ? ROW_H_TABLET : ROW_H;
   const isToday = date === today;
   const ns = nowSlot(now);
   const nowRow = Math.floor(ns / 6);
 
-  const gridRef = useRef<HTMLDivElement>(null);
-  const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const gesture = useRef<{
     id: number; x: number; y: number; timer?: ReturnType<typeof setTimeout>; painting: boolean; anchor: number;
     blockId?: string; mouse: boolean;
   } | null>(null);
+  const tap = useRef<{ blockId?: string; anchor: number } | null>(null);
 
   const slotAt = (x: number, y: number) => {
-    const grid = gridRef.current!;
-    const track = grid.querySelector('.tt-track') as HTMLElement;
-    const g = grid.getBoundingClientRect();
-    const t = track.getBoundingClientRect();
-    const row = Math.max(0, Math.min(ROWS - 1, Math.floor((y - g.top) / rowH)));
-    const col = Math.max(0, Math.min(5, Math.floor(((x - t.left) / t.width) * 6)));
+    const r = bodyRef.current!.getBoundingClientRect();
+    const row = Math.max(0, Math.min(ROWS - 1, Math.floor((y - r.top) / rowH)));
+    const col = Math.max(0, Math.min(5, Math.floor(((x - r.left) / r.width) * 6)));
     return row * 6 + col;
   };
 
   // 칠하는 중에는 스크롤 막기 (iOS Safari: passive가 아닌 touchmove에서 preventDefault)
   useEffect(() => {
-    const el = gridRef.current;
+    const el = bodyRef.current;
     if (!el) return;
     const onMove = (e: TouchEvent) => {
       if (gesture.current?.painting) e.preventDefault();
@@ -95,6 +104,7 @@ export function TimetableScreen({ embedded }: { embedded?: boolean }) {
   };
 
   const onDown = (e: RPointerEvent) => {
+    tap.current = null;
     if (e.button !== 0) return;
     const slot = slotAt(e.clientX, e.clientY);
     const blockEl = (e.target as HTMLElement).closest('[data-block]') as HTMLElement | null;
@@ -129,21 +139,33 @@ export function TimetableScreen({ embedded }: { embedded?: boolean }) {
     gesture.current = null;
     if (g.painting) {
       const s = slotAt(e.clientX, e.clientY);
-      const range: [number, number] = [Math.min(g.anchor, s), Math.max(g.anchor, s) + 1];
       setSel(null);
-      setDraft({ date, kind, start: range[0], end: range[1] });
+      setDraft({ date, kind, start: Math.min(g.anchor, s), end: Math.max(g.anchor, s) + 1 });
       return;
     }
-    // 짧게 탭
-    if (g.blockId) {
-      const b = blocks.find((x) => x.id === g.blockId);
+    // 짧게 탭: 처리는 click에서 한다 (pointerup에서 시트를 열면 뒤따르는 click이 시트 안을 눌러 버림)
+    tap.current = { blockId: g.blockId, anchor: g.anchor };
+  };
+
+  const onClick = () => {
+    const t = tap.current;
+    tap.current = null;
+    if (!t) return;
+    if (t.blockId) {
+      const b = blocks.find((x) => x.id === t.blockId);
       if (b) setDraft({ ...b });
       return;
     }
+    const g = t;
     if (!zoom) {
+      // 작은 칸 입력을 위해 그 시간대를 크게 확대
       const row = Math.floor(g.anchor / 6);
       setZoom(true);
-      requestAnimationFrame(() => rowRefs.current[row]?.scrollIntoView({ block: 'center' }));
+      requestAnimationFrame(() => {
+        const body = bodyRef.current;
+        const scroller = body?.closest('.tt-scroll');
+        if (body && scroller) scroller.scrollTop = body.offsetTop + row * ROW_H_ZOOM - scroller.clientHeight / 2 + ROW_H_ZOOM / 2;
+      });
       return;
     }
     setDraft({ date, kind, start: g.anchor, end: Math.min(SLOTS, g.anchor + 6) });
@@ -160,150 +182,182 @@ export function TimetableScreen({ embedded }: { embedded?: boolean }) {
     toast(n ? `PLAN ${fmtMinutes(n * 10)}을 DONE에 복사했어요` : '복사할 PLAN이 없어요 (이미 DONE에 있는 칸은 건너뛰어요)');
   };
 
-  const addAtNow = () => {
-    const s = isToday ? Math.min(SLOTS - 6, Math.floor(ns)) : 0;
-    setDraft({ date, kind, start: s, end: s + 6 });
-  };
+  const rect = (p: Pick<Piece, 'row' | 'rows' | 'from' | 'to'>) => ({
+    left: `${(p.from / 6) * 100}%`,
+    width: `${((p.to - p.from) / 6) * 100}%`,
+    top: p.row * rowH + 1,
+    height: p.rows * rowH - 2,
+  });
 
-  const renderSeg = (b: Block, seg: Seg, isGhost: boolean) => {
+  const renderBlock = (b: Block, isGhost: boolean) => {
     const bundle = bundleMap.get(b.bundleId);
     const c = colorOf(bundle?.color);
-    return (
-      <div key={seg.key} className={'tt-block' + (isGhost ? ' ghost' : '') + (b.kind === 'plan' ? ' plan' : ' done')}
-        data-block={isGhost ? undefined : b.id}
-        style={{
-          left: `${(seg.from / 6) * 100}%`, width: `${((seg.to - seg.from) / 6) * 100}%`,
-          ['--c' as string]: c.strong, ['--cl' as string]: c.light,
-        }}
-        aria-hidden="true">
-        {!isGhost && seg.first && <span className="tt-block-title">{b.title || bundle?.name}</span>}
-        {!isGhost && seg.first && b.memo && <span className="tt-memo"><Icon name="memo" size={zoom ? 14 : 11} stroke={2.2} /></span>}
-      </div>
-    );
+    const mins = (b.end - b.start) * 10;
+    const range = `${slotLabel(b.start)}–${slotLabel(b.end)}`;
+    const ps = pieces(b.id, b.start, b.end);
+    const labelIdx = ps.findIndex((p) => p.rows > 1);
+    return ps.map((p, i) => {
+      const tall = p.rows > 1 && i === labelIdx;
+      const showLabel = !isGhost && (labelIdx >= 0 ? i === labelIdx || (i === 0 && labelIdx > 0) : p.first);
+      const titleOnly = labelIdx > 0 && i === 0; // 앞쪽 짧은 조각은 제목만
+      return (
+        <div key={p.key} className={'tt-block ' + b.kind + (isGhost ? ' ghost' : '') + (tall ? ' tall' : '')}
+          data-block={isGhost ? undefined : b.id} aria-hidden="true"
+          style={{ ...rect(p), ['--c' as string]: c.strong, ['--cl' as string]: c.light, ['--ink' as string]: c.ink }}>
+          {showLabel && (
+            tall ? (
+              <>
+                <span className="tt-title">{b.title || bundle?.name}{b.memo && <MemoIcon />}</span>
+                <span className="tt-time">{range} · {fmtMinutes(mins)}{bundle?.income ? ` · ${won((mins / 60) * bundle.wage)}` : ''}</span>
+              </>
+            ) : (
+              <>
+                <span className="tt-title">{b.title || bundle?.name}</span>
+                {!titleOnly && <span className="tt-time">{range}</span>}
+                {b.memo && <MemoIcon />}
+              </>
+            )
+          )}
+        </div>
+      );
+    });
   };
-
-  const rows = Array.from({ length: ROWS }, (_, r) => r);
-  const segsByRow = (list: Block[]) => {
-    const m = new Map<number, { b: Block; seg: Seg }[]>();
-    for (const b of list) for (const seg of segments(b.id, b.start, b.end)) {
-      if (!m.has(seg.row)) m.set(seg.row, []);
-      m.get(seg.row)!.push({ b, seg });
-    }
-    return m;
-  };
-  const shownRows = segsByRow(shown);
-  const ghostRows = segsByRow(ghost);
-  const selSegs = sel ? segments('sel', sel[0], sel[1]) : [];
 
   return (
     <div className="screen">
       {!embedded && <AppTitle />}
       <div className="tt-toolbar">
-        <div className="date-nav">
-          <IconButton icon="left" label="어제" onClick={() => setDate(addDays(date, -1))} />
-          <button type="button" className="date-label" onClick={() => setDate(today)} aria-label={`${fmtDateLong(date)}, 오늘로 이동`}>
-            {fmtDateLong(date)}{isToday && <span className="today-dot" aria-hidden="true" />}
-          </button>
-          <IconButton icon="right" label="내일" onClick={() => setDate(addDays(date, 1))} />
-          <span className="spacer" />
-          {settings.sections.summary && (
-            <button type="button" className="agg-btn" onClick={() => setAggOpen(true)} aria-label={`집계시간 ${fmtMinutes(aggMinutes)}, 집계 항목 선택`}>
-              <span className="muted small">집계</span> <strong>{fmtHM(aggMinutes)}</strong>
-            </button>
-          )}
-        </div>
+        {!embedded && <DateCard date={date} today={today} onChange={setDate} addDays={addDays} />}
         <div className="tt-actions">
           <Segmented label="PLAN / DONE" value={kind} onChange={setKind}
             options={[{ value: 'plan', label: 'PLAN' }, { value: 'done', label: 'DONE' }]} />
-          <button type="button" className="btn soft small tt-copy" onClick={copyAll} aria-label="PLAN → DONE 복사">
-            <Icon name="copy" size={16} />PLAN→DONE
+          <button type="button" className="btn outline tt-copy" onClick={copyAll} aria-label="PLAN을 DONE으로 복사">
+            <Icon name="arrowRight" size={16} /> DONE으로 복사
           </button>
-          <span className="spacer" />
-          <IconButton icon={zoom ? 'zoomOut' : 'zoomIn'} label={zoom ? '확대 끄기' : '확대 보기'} pressed={zoom} onClick={() => setZoom(!zoom)} />
-          <IconButton icon="plus" label="시간 선택해서 넣기" className="accent" onClick={addAtNow} />
+          {zoom && <IconButton icon="zoomOut" label="확대 끄기" pressed onClick={() => setZoom(false)} />}
         </div>
+        {settings.sections.summary && (
+          <div className="tt-agg">
+            <span className="muted">집계시간 <b>{fmtMinutes(aggMinutes)}</b></span>
+            <button type="button" className="pill-btn" onClick={() => setAggOpen(true)}>
+              <span className="pill"><Icon name="sliders" size={14} stroke={2.2} /> 집계 항목 선택</span>
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="screen-body tt-scroll">
-        <div className={'tt-grid' + (zoom ? ' zoom' : '') + (kind === 'done' ? ' mode-done' : '')} ref={gridRef}
-          style={{ ['--row-h' as string]: `${rowH}px` }}
-          onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onCancel}
-          onContextMenu={(e) => e.preventDefault()}
-          role="grid" aria-label={`${fmtDateLong(date)} ${kind === 'plan' ? 'PLAN' : 'DONE'} 시간표. 길게 눌러 끌면 칠하고, 탭하면 확대돼요.`}>
-          {rows.map((r) => (
-            <div key={r} className="tt-row" ref={(el) => { rowRefs.current[r] = el; }} role="row">
-              <div className={'tt-hour' + (isToday && r === nowRow ? ' now' : '')} role="rowheader">
-                <span>{hourOfRow(r)}</span>
-              </div>
-              <div className="tt-track" role="gridcell"
-                aria-label={`${hourOfRow(r)}시: ${(shownRows.get(r) ?? []).map(({ b }) => b.title).join(', ') || '비어 있음'}`}>
-                {[1, 2, 3, 4, 5].map((i) => <span key={i} className="tt-tick" style={{ left: `${(i / 6) * 100}%` }} />)}
-                {(ghostRows.get(r) ?? []).map(({ b, seg }) => renderSeg(b, seg, true))}
-                {(shownRows.get(r) ?? []).map(({ b, seg }) => renderSeg(b, seg, false))}
-                {selSegs.filter((s) => s.row === r).map((s) => (
-                  <div key={s.key} className="tt-sel" style={{ left: `${(s.from / 6) * 100}%`, width: `${((s.to - s.from) / 6) * 100}%` }} />
-                ))}
-                {isToday && r === nowRow && <div className="tt-now" style={{ left: `${((ns % 6) / 6) * 100}%` }} />}
-              </div>
-            </div>
-          ))}
+        <div className={'tt-grid' + (zoom ? ' zoom' : '')} style={{ ['--row-h' as string]: `${rowH}px` }}>
+          <div className="tt-hours" aria-hidden="true">
+            {Array.from({ length: ROWS }, (_, r) => (
+              <div key={r} className={'tt-hour' + (isToday && r === nowRow ? ' now' : '')}><span>{hourOfRow(r)}</span></div>
+            ))}
+          </div>
+          <div className="tt-body" ref={bodyRef} style={{ height: ROWS * rowH }}
+            onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onCancel} onClick={onClick}
+            onContextMenu={(e) => e.preventDefault()}
+            aria-label={`${fmtDateLong(date)} ${kind === 'plan' ? 'PLAN' : 'DONE'} 시간표. 길게 눌러 끌면 칠하고, 탭하면 확대돼요.`}
+            role="application">
+            {ghost.map((b) => renderBlock(b, true))}
+            {shown.map((b) => renderBlock(b, false))}
+            {sel && pieces('sel', sel[0], sel[1]).map((p) => <div key={p.key} className="tt-sel" style={rect(p)} />)}
+            {isToday && <div className="tt-now" style={{ left: `${((ns % 6) / 6) * 100}%`, top: nowRow * rowH, height: rowH }} />}
+          </div>
         </div>
+        <ul className="sr-only" aria-label="이 날의 블록">
+          {shown.map((b) => (
+            <li key={b.id}>
+              <button type="button" onClick={() => setDraft({ ...b })}>
+                {slotLabel(b.start)}부터 {slotLabel(b.end)}까지 {b.title}{b.memo ? ', 메모 있음' : ''}
+              </button>
+            </li>
+          ))}
+          <li>
+            <button type="button" onClick={() => {
+              const s = isToday ? Math.min(SLOTS - 6, Math.floor(ns)) : 0;
+              setDraft({ date, kind, start: s, end: s + 6 });
+            }}>새 블록 추가</button>
+          </li>
+        </ul>
         <p className="muted small tt-help">길게 눌러 끌면 칠하기 · 칸을 탭하면 확대 · 블록을 탭하면 메모</p>
       </div>
 
       <BlockSheet draft={draft} onClose={() => setDraft(null)} />
-      <AggregateSheet open={aggOpen} onClose={() => setAggOpen(false)} />
+      <AggregateSheet open={aggOpen} onClose={() => setAggOpen(false)} blocks={blocks} />
     </div>
   );
 }
 
-/** 집계 항목 선택: 카테고리 체크 시 하위 묶음 전체 */
-export function AggregateSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+const MemoIcon = () => <span className="tt-memo"><Icon name="memo" size={11} stroke={2.2} /></span>;
+
+/** 집계할 항목 선택: 카테고리 체크 시 하위 묶음 전체, 적용을 눌러야 저장 */
+export function AggregateSheet({ open, onClose, blocks }: { open: boolean; onClose: () => void; blocks: Block[] }) {
   const { settings, session } = useApp();
   const categories = useCategories();
   const bundles = useBundles();
-  const { categoryIds, bundleIds } = settings.aggregate;
+  const [cats, setCats] = useState<string[]>([]);
+  const [bs, setBs] = useState<string[]>([]);
 
-  const save = (cats: string[], bs: string[]) =>
-    saveSettings({ aggregate: { categoryIds: cats, bundleIds: bs } }, session.nickname);
+  useEffect(() => {
+    if (!open) return;
+    setCats(settings.aggregate.categoryIds);
+    setBs(settings.aggregate.bundleIds);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const doneMin = (ids: Set<string>) =>
+    blocks.filter((b) => b.kind === 'done' && ids.has(b.bundleId)).reduce((s, b) => s + (b.end - b.start) * 10, 0);
+  const selected = aggregateBundleIds({ ...settings, aggregate: { categoryIds: cats, bundleIds: bs } }, bundles);
 
   const toggleCat = (id: string, on: boolean) => {
     const children = bundles.filter((b) => b.categoryId === id).map((b) => b.id);
-    const bs = bundleIds.filter((b) => !children.includes(b));
-    save(on ? [...categoryIds, id] : categoryIds.filter((c) => c !== id), bs);
+    setBs(bs.filter((b) => !children.includes(b)));
+    setCats(on ? [...cats, id] : cats.filter((c) => c !== id));
   };
   const toggleBundle = (catId: string, id: string, on: boolean) => {
-    if (categoryIds.includes(catId)) {
+    if (cats.includes(catId)) {
       // 카테고리 전체 선택에서 하나를 빼면 나머지 묶음을 개별 선택으로 바꾼다
       const rest = bundles.filter((b) => b.categoryId === catId && b.id !== id).map((b) => b.id);
-      save(categoryIds.filter((c) => c !== catId), [...bundleIds, ...rest]);
+      setCats(cats.filter((c) => c !== catId));
+      setBs([...bs, ...rest]);
       return;
     }
-    save(categoryIds, on ? [...bundleIds, id] : bundleIds.filter((b) => b !== id));
+    setBs(on ? [...bs, id] : bs.filter((b) => b !== id));
+  };
+  const apply = async () => {
+    await saveSettings({ aggregate: { categoryIds: cats, bundleIds: bs } }, session.nickname);
+    onClose();
   };
 
   return (
-    <Sheet open={open} onClose={onClose} title="집계 항목 선택"
-      footer={<button type="button" className="btn primary grow" onClick={onClose}>완료</button>}>
-      <p className="muted small">선택한 항목의 DONE 시간을 합쳐서 집계시간으로 보여줘요.</p>
+    <Sheet open={open} onClose={onClose} title="집계할 항목 선택"
+      footer={
+        <>
+          <div className="agg-total"><span className="muted small">집계시간</span><strong>{fmtMinutes(doneMin(selected))}</strong></div>
+          <button type="button" className="btn primary grow" onClick={apply}>적용</button>
+        </>
+      }>
+      <p className="muted small">고른 항목의 시간만 위쪽 집계시간에 더해져요</p>
       <ul className="agg-list">
         {categories.map((c) => {
           const children = bundles.filter((b) => b.categoryId === c.id);
-          const catOn = categoryIds.includes(c.id);
-          const some = !catOn && children.some((b) => bundleIds.includes(b.id));
+          const catOn = cats.includes(c.id);
+          const some = !catOn && children.some((b) => bs.includes(b.id));
           return (
             <li key={c.id}>
               <div className="agg-row">
-                <Checkbox checked={catOn} indeterminate={some} label={`${c.name} 전체`} onChange={(v) => toggleCat(c.id, v)} />
-                <span className="dot" style={{ background: colorOf(c.color).strong }} />
-                <strong>{c.name}</strong>
+                <Checkbox checked={catOn} indeterminate={some} label={`${c.name} 전체`} color="#4B55D6" onChange={(v) => toggleCat(c.id, v)} />
+                <strong className="grow">{c.name}</strong>
+                <span className="muted small">{fmtMinutes(doneMin(new Set(children.map((b) => b.id))))}</span>
               </div>
               <ul>
                 {children.map((b) => (
                   <li key={b.id} className="agg-row sub">
-                    <Checkbox checked={catOn || bundleIds.includes(b.id)} label={b.name} color={colorOf(b.color).strong}
+                    <Checkbox checked={catOn || bs.includes(b.id)} label={b.name} color="#4B55D6"
                       onChange={(v) => toggleBundle(c.id, b.id, v)} />
-                    <span>{b.name}</span>
+                    <span className="dot" style={{ background: colorOf(b.color).strong }} />
+                    <span className="grow">{b.name}</span>
+                    <span className="muted small">{fmtMinutes(doneMin(new Set([b.id])))}</span>
                   </li>
                 ))}
               </ul>

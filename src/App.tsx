@@ -14,6 +14,7 @@ import { LedgerScreen } from './screens/Ledger';
 import { StatsScreen } from './screens/Stats';
 import { SectionsScreen, SettingsScreen } from './screens/Settings';
 import type { ScreenKey, Settings } from './lib/types';
+import { logicalToday } from './lib/time';
 
 async function prepare(s: SessionInfo) {
   startSync();
@@ -66,11 +67,11 @@ export default function App() {
 }
 
 const TABS: { key: ScreenKey; label: string; icon: string }[] = [
-  { key: 'todo', label: '할 일', icon: 'list' },
-  { key: 'timetable', label: '시간표', icon: 'grid' },
-  { key: 'ledger', label: '가계부', icon: 'wallet' },
-  { key: 'stats', label: '통계', icon: 'chart' },
-  { key: 'settings', label: '설정', icon: 'gear' },
+  { key: 'todo', label: '할 일', icon: 'tabTodo' },
+  { key: 'timetable', label: '시간표', icon: 'tabTime' },
+  { key: 'ledger', label: '가계부', icon: 'tabWallet' },
+  { key: 'stats', label: '통계', icon: 'tabChart' },
+  { key: 'settings', label: '설정', icon: 'sliders' },
 ];
 
 const visible = (s: Settings, k: ScreenKey) => (k === 'stats' ? s.sections.stats : k === 'ledger' ? s.sections.ledger : true);
@@ -80,6 +81,7 @@ function Shell({ session, setSession }: { session: SessionInfo; setSession: (s: 
   const tablet = useMediaQuery('(min-width: 1000px) and (orientation: landscape)');
   const [screen, setScreen] = useState<ScreenKey | null>(null);
   const [toastMsg, setToastMsg] = useState('');
+  const [date, setDate] = useState(() => logicalToday());
   const toastTimer = useRef<ReturnType<typeof setTimeout>>();
 
   useEffect(() => {
@@ -94,7 +96,7 @@ function Shell({ session, setSession }: { session: SessionInfo; setSession: (s: 
 
   if (!settings || !screen) return <div className="boot" aria-busy="true" />;
 
-  const ctx: AppCtx = { session, settings, setSession, go: setScreen, toast, tablet };
+  const ctx: AppCtx = { session, settings, setSession, go: setScreen, toast, tablet, date, setDate };
   const current = visible(settings, screen) ? screen : 'timetable';
   const tabs = TABS.filter((t) => visible(settings, t.key));
 
@@ -113,7 +115,7 @@ function Shell({ session, setSession }: { session: SessionInfo; setSession: (s: 
             {tabs.map((t) => (
               <button key={t.key} type="button" className={'tab' + (current === t.key ? ' on' : '')}
                 aria-current={current === t.key ? 'page' : undefined} onClick={() => setScreen(t.key)}>
-                <Icon name={t.icon} size={22} />
+                <Icon name={t.icon} size={24} />
                 <span>{t.label}</span>
               </button>
             ))}

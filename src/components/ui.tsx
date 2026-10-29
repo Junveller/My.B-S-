@@ -27,16 +27,43 @@ export function Switch({ checked, onChange, label }: { checked: boolean; onChang
   );
 }
 
-export function Checkbox({ checked, onChange, label, color, indeterminate }: {
-  checked: boolean; onChange: (v: boolean) => void; label: string; color?: string; indeterminate?: boolean;
+export function Checkbox({ checked, onChange, label, color, indeterminate, number }: {
+  checked: boolean; onChange: (v: boolean) => void; label: string; color?: string; indeterminate?: boolean; number?: number;
 }) {
   return (
     <button type="button" role="checkbox" aria-checked={indeterminate ? 'mixed' : checked} aria-label={label}
       className={'checkbox' + (checked ? ' on' : '') + (indeterminate ? ' mixed' : '')}
-      style={checked && color ? { background: color, borderColor: color } : undefined}
+      style={color ? { ['--check' as string]: color } : undefined}
       onClick={() => onChange(!checked)}>
-      <span className="checkbox-box">{checked ? <Icon name="check" size={14} stroke={3} /> : indeterminate ? <span className="dash" /> : null}</span>
+      <span className="checkbox-box">
+        {number !== undefined ? number : checked ? <Icon name="check" size={14} stroke={3} /> : indeterminate ? <span className="dash" /> : null}
+      </span>
     </button>
+  );
+}
+
+/** 날짜 카드: ‹ 날짜 › (가운데를 누르면 오늘로) */
+export function DateCard({ date, today, onChange, twoLine, addDays }: {
+  date: string; today: string; onChange: (d: string) => void; twoLine?: boolean; addDays: (d: string, n: number) => string;
+}) {
+  const [y, m, d] = date.split('-').map(Number);
+  const wd = ['일', '월', '화', '수', '목', '금', '토'][new Date(y, m - 1, d).getDay()];
+  return (
+    <div className={'date-card' + (twoLine ? ' two' : '')}>
+      <IconButton icon="left" label="어제" onClick={() => onChange(addDays(date, -1))} />
+      <button type="button" className="date-card-label" onClick={() => onChange(today)}
+        aria-label={`${y}년 ${m}월 ${d}일 ${wd}요일${date === today ? ', 오늘' : ', 오늘로 이동'}`}>
+        {twoLine ? (
+          <>
+            <span className="date-card-year">{y}년</span>
+            <span className="date-card-main">{m}월 {d}일 {wd}{date === today && <span className="today-dot" aria-hidden="true" />}</span>
+          </>
+        ) : (
+          <span className="date-card-main">{y}년 {m}월 {d}일 {wd}{date === today && <span className="today-dot" aria-hidden="true" />}</span>
+        )}
+      </button>
+      <IconButton icon="right" label="내일" onClick={() => onChange(addDays(date, 1))} />
+    </div>
   );
 }
 
@@ -51,12 +78,19 @@ export function IconButton({ icon, label, onClick, className = '', pressed }: {
   );
 }
 
-export function Sheet({ open, onClose, title, children, footer, tall }: {
+export function Sheet({ open, onClose, title, children, footer, tall, heading, page, action }: {
   open: boolean; onClose: () => void; title: string; children: ReactNode; footer?: ReactNode; tall?: boolean;
+  /** 제목 대신 보여줄 머리 (예: 블록 제목) */
+  heading?: ReactNode;
+  /** 전체 화면 페이지 (뒤로 · 제목 · 오른쪽 버튼) */
+  page?: boolean;
+  action?: ReactNode;
 }) {
   const id = useId();
   const ref = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
+  /** 바깥을 눌러 닫기: 누르기 시작한 곳도 바깥이어야 한다 (탭으로 연 직후의 click 무시) */
+  const downOutside = useRef(false);
   closeRef.current = onClose;
   useEffect(() => {
     if (!open) return;
@@ -71,14 +105,26 @@ export function Sheet({ open, onClose, title, children, footer, tall }: {
   }, [open]);
   if (!open) return null;
   return (
-    <div className="sheet-backdrop" onClick={onClose}>
-      <div className={'sheet' + (tall ? ' tall' : '')} role="dialog" aria-modal="true" aria-labelledby={id}
-        ref={ref} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
-        <div className="sheet-handle" aria-hidden="true" />
-        <div className="sheet-head">
-          <h2 id={id}>{title}</h2>
-          <IconButton icon="x" label="닫기" onClick={onClose} />
-        </div>
+    <div className="sheet-backdrop"
+      onPointerDown={(e) => { downOutside.current = e.target === e.currentTarget; }}
+      onClick={(e) => { if (e.target === e.currentTarget && downOutside.current) onClose(); downOutside.current = false; }}>
+      <div className={'sheet' + (tall ? ' tall' : '') + (page ? ' page' : '')} role="dialog" aria-modal="true" aria-labelledby={id}
+        ref={ref} tabIndex={-1}>
+        {page ? (
+          <div className="page-head">
+            <IconButton icon="left" label="뒤로" onClick={onClose} />
+            <h2 id={id}>{title}</h2>
+            <div className="page-action">{action}</div>
+          </div>
+        ) : (
+          <>
+            <div className="sheet-handle" aria-hidden="true" />
+            <div className="sheet-head">
+              <h2 id={id}>{heading ?? title}</h2>
+              <IconButton icon="x" label="닫기" onClick={onClose} />
+            </div>
+          </>
+        )}
         <div className="sheet-body">{children}</div>
         {footer && <div className="sheet-foot">{footer}</div>}
       </div>
@@ -111,6 +157,15 @@ export function Segmented<T extends string>({ value, options, onChange, label }:
           {o.label}
         </button>
       ))}
+    </div>
+  );
+}
+
+export function ScreenHeading({ children, right }: { children: ReactNode; right?: ReactNode }) {
+  return (
+    <div className="screen-heading">
+      <h2>{children}</h2>
+      {right && <div className="screen-heading-right">{right}</div>}
     </div>
   );
 }

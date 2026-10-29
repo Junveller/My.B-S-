@@ -1,6 +1,11 @@
 const paths: Record<string, string> = {
   check: 'M5 12.5l4.5 4.5L19 7.5',
-  clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2',
+  clock: 'M12 20.5a8.5 8.5 0 1 0 0-17 8.5 8.5 0 0 0 0 17zM12 7.5V12l3 2',
+  arrowRight: 'M5 12h14M13 6l6 6-6 6',
+  tabTodo: 'M8 4h8a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4V8a4 4 0 0 1 4-4zM8.5 12.5l2.5 2.5 4.5-5',
+  tabTime: 'M7 5h10a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3zM4 10h16M10 10v10',
+  tabWallet: 'M6 6h12a3 3 0 0 1 3 3v7a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V9a3 3 0 0 1 3-3zM3 10h18M16 14.5h2',
+  tabChart: 'M6 20v-9M12 20V5M18 20v-6',
   memo: 'M6 4h9l4 4v12H6zM14 4v5h5M9 13h7M9 17h5',
   left: 'M15 5l-7 7 7 7',
   right: 'M9 5l7 7-7 7',
@@ -22,7 +27,7 @@ const paths: Record<string, string> = {
   down: 'M6 9l6 6 6-6',
   x: 'M6 6l12 12M18 6L6 18',
   dots: 'M5 12h.01M12 12h.01M19 12h.01',
-  sliders: 'M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0M14 4v4M8 10v4M16 16v4',
+  sliders: 'M5 8h9M18 8h1M5 16h1M10 16h9M16 6a2 2 0 1 1 0 4 2 2 0 0 1 0-4zM8 14a2 2 0 1 1 0 4 2 2 0 0 1 0-4z',
 };
 
 export function Icon({ name, size = 20, stroke = 2 }: { name: keyof typeof paths | string; size?: number; stroke?: number }) {

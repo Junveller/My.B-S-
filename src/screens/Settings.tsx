@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { AppTitle, Field, Row, Sheet, Switch } from '../components/ui';
+import { AppTitle, Field, Row, ScreenHeading, Sheet, Switch } from '../components/ui';
 import { saveSettings } from '../lib/data';
 import { useApp } from '../lib/hooks';
 import {
@@ -10,14 +10,14 @@ import { remoteMode } from '../lib/supabase';
 import { isPin } from '../lib/crypto';
 import type { ScreenKey, Sections } from '../lib/types';
 
-const SECTION_LABELS: [keyof Sections, string][] = [
-  ['top3', 'Top 3'],
-  ['summary', '집계시간 · Todo 진행'],
-  ['stats', '통계 · 알바 수입'],
-  ['ledger', '가계부'],
-  ['dailyReview', 'Daily Review'],
-  ['dday', 'D-Day'],
-  ['goal', 'Goal'],
+const SECTION_LABELS: [keyof Sections, string, string][] = [
+  ['top3', 'Top 3', '오늘 가장 중요한 3가지'],
+  ['summary', '집계시간 · Todo 진행', '시간표 위쪽 요약'],
+  ['stats', '통계 · 알바 수입', '모인 돈, 주·월 근무시간'],
+  ['ledger', '가계부', '지출, 예산, 결제수단'],
+  ['dailyReview', 'Daily Review', '하루 돌아보기 · 다음 버전 예정'],
+  ['dday', 'D-Day', '날짜 카운트다운 · 다음 버전 예정'],
+  ['goal', 'Goal', '목표 관리 · 다음 버전 예정'],
 ];
 
 /** 표시할 섹션: 끄면 화면에서만 숨기고 데이터는 유지 */
@@ -27,25 +27,65 @@ export function SectionsList() {
     saveSettings({ sections: { ...settings.sections, [k]: v } }, session.nickname);
   return (
     <div className="card list">
-      {SECTION_LABELS.map(([k, label]) => (
-        <Row key={k} label={label} sub={['dailyReview', 'dday', 'goal'].includes(k) ? '다음 버전 예정' : undefined}>
-          <Switch checked={settings.sections[k]} onChange={(v) => set(k, v)} label={label} />
+      {SECTION_LABELS.map(([k, label, sub]) => (
+        <Row key={k} label={label} sub={sub}>
+          <Switch checked={settings.sections[k]} onChange={(v) => set(k, v)} label={`${label} 표시`} />
         </Row>
       ))}
     </div>
   );
 }
 
+/** 하루계획 열 때 (시작 화면) */
+function StartScreenChips() {
+  const { settings, session } = useApp();
+  return (
+    <div className="chips" role="radiogroup" aria-label="하루계획 열 때">
+      {START_OPTIONS.map((o) => (
+        <button key={o.value} type="button" role="radio" aria-checked={settings.startScreen === o.value}
+          className={'chip lg' + (settings.startScreen === o.value ? ' on' : '')}
+          onClick={() => saveSettings({ startScreen: o.value }, session.nickname)}>
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function NameField() {
+  const { settings, session } = useApp();
+  const [name, setName] = useState(settings.displayName);
+  useEffect(() => setName(settings.displayName), [settings.displayName]);
+  const save = () => {
+    const n = name.trim();
+    if (!n) return setName(settings.displayName);
+    if (n !== settings.displayName) saveSettings({ displayName: n }, session.nickname);
+  };
+  return (
+    <Field label="닉네임" hint={`화면 맨 위에 “${name.trim() || settings.displayName}의 비서”로 보여요. 로그인 닉네임은 ${session.nickname}이에요.`}>
+      <input className="input" value={name} maxLength={20} onChange={(e) => setName(e.target.value)} onBlur={save}
+        onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()} />
+    </Field>
+  );
+}
+
+/** 아이패드 오른쪽 패널의 ‘가리기’ → 표시할 섹션 */
 export function SectionsScreen({ onDone }: { onDone: () => void }) {
   return (
     <div className="screen">
       <div className="screen-body">
         <div className="pane-head">
-          <h2 className="pane-title">표시할 섹션</h2>
+          <h2 className="pane-title">설정</h2>
           <button type="button" className="btn primary small" onClick={onDone}>완료</button>
         </div>
-        <p className="muted small">끄면 화면에서만 숨겨요. 데이터는 그대로 남아 있어요.</p>
+        <div>
+          <h3 className="block-title">표시할 섹션</h3>
+          <p className="muted small">끄면 화면에서만 숨겨지고, 기록은 그대로 남아요</p>
+        </div>
         <SectionsList />
+        <h3 className="block-title">하루계획 열 때</h3>
+        <StartScreenChips />
+        <div className="card list"><NameField /></div>
       </div>
     </div>
   );
@@ -67,8 +107,7 @@ const SYNC_LABEL: Record<SyncStatus, string> = {
 };
 
 export function SettingsScreen({ embedded }: { embedded?: boolean }) {
-  const { settings, session, setSession, toast } = useApp();
-  const [name, setName] = useState(settings.displayName);
+  const { session, setSession, toast } = useApp();
   const [sync, setSync] = useState(getSyncStatus());
   const [email, setEmail] = useState<string | null>(null);
   const [emailInput, setEmailInput] = useState('');
@@ -76,7 +115,6 @@ export function SettingsScreen({ embedded }: { embedded?: boolean }) {
   const [codeOpen, setCodeOpen] = useState(false);
   const standalone = matchMedia('(display-mode: standalone)').matches || (navigator as { standalone?: boolean }).standalone;
 
-  useEffect(() => setName(settings.displayName), [settings.displayName]);
   useEffect(() => {
     const off = onSyncStatus(setSync);
     return () => { off(); };
@@ -84,12 +122,6 @@ export function SettingsScreen({ embedded }: { embedded?: boolean }) {
   useEffect(() => {
     if (remoteMode) linkedEmail().then(setEmail);
   }, []);
-
-  const saveName = () => {
-    const n = name.trim();
-    if (!n) return setName(settings.displayName);
-    if (n !== settings.displayName) saveSettings({ displayName: n }, session.nickname);
-  };
 
   const connectEmail = async () => {
     try {
@@ -111,30 +143,20 @@ export function SettingsScreen({ embedded }: { embedded?: boolean }) {
     <div className="screen">
       {!embedded && <AppTitle />}
       <div className="screen-body">
-        {embedded ? <h2 className="pane-title">설정</h2> : <h2 className="section-title">설정</h2>}
+        {!embedded && <ScreenHeading>설정</ScreenHeading>}
 
-        <h3 className="section-title">표시할 섹션</h3>
+        <div>
+          <h3 className="block-title">표시할 섹션</h3>
+          <p className="muted small">끄면 화면에서만 숨겨지고, 기록은 그대로 남아요</p>
+        </div>
         <SectionsList />
 
-        <h3 className="section-title">하루계획 열 때</h3>
-        <div className="card list">
-          <div className="radio-list" role="radiogroup" aria-label="시작 화면">
-            {START_OPTIONS.map((o) => (
-              <button key={o.value} type="button" role="radio" aria-checked={settings.startScreen === o.value}
-                className={'radio-row' + (settings.startScreen === o.value ? ' on' : '')}
-                onClick={() => saveSettings({ startScreen: o.value }, session.nickname)}>
-                <span className="radio-dot" />{o.label}
-              </button>
-            ))}
-          </div>
-        </div>
+        <h3 className="block-title">하루계획 열 때</h3>
+        <StartScreenChips />
 
-        <h3 className="section-title">계정</h3>
+        <h3 className="block-title">계정</h3>
         <div className="card list">
-          <Field label="표시 이름" hint={`화면 맨 위에 “${name.trim() || settings.displayName}의 비서”로 보여요. 로그인 닉네임은 ${session.nickname}이에요.`}>
-            <input className="input" value={name} maxLength={20} onChange={(e) => setName(e.target.value)} onBlur={saveName}
-              onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()} />
-          </Field>
+          <NameField />
           <Row label="비밀번호 (숫자 4자리) 변경"><button type="button" className="btn soft small" onClick={() => setPinOpen(true)}>변경</button></Row>
           <Row label="복구 코드 확인" sub="비밀번호를 잊었을 때 필요해요">
             <button type="button" className="btn soft small" onClick={() => setCodeOpen(true)}>보기</button>
@@ -167,7 +189,7 @@ export function SettingsScreen({ embedded }: { embedded?: boolean }) {
           )}
         </div>
 
-        <button type="button" className="btn danger-ghost wide" onClick={logout}>로그아웃</button>
+        <button type="button" className="btn outline danger wide" onClick={logout}>로그아웃</button>
         <p className="muted small center">Bisje · 변경 사항은 자동으로 저장돼요</p>
       </div>
 
@@ -195,7 +217,7 @@ function PinSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   };
   return (
     <Sheet open={open} onClose={onClose} title="비밀번호 변경"
-      footer={<button type="button" className="btn primary grow" disabled={!ok} onClick={save}>저장</button>}>
+      footer={<button type="button" className="btn primary big grow" disabled={!ok} onClick={save}>저장</button>}>
       <Field label="새 비밀번호 (숫자 4자리)"><PinInput value={a} onChange={setA} autoFocus /></Field>
       <Field label="한 번 더"><PinInput value={b} onChange={setB} /></Field>
       {b.length === 4 && a !== b && <p className="error">두 번 입력한 비밀번호가 달라요</p>}
@@ -217,7 +239,7 @@ function RecoveryCodeSheet({ open, onClose, code, onRegenerated }: {
   };
   return (
     <Sheet open={open} onClose={onClose} title="복구 코드"
-      footer={<button type="button" className="btn primary grow" onClick={onClose}>닫기</button>}>
+      footer={<button type="button" className="btn primary big grow" onClick={onClose}>닫기</button>}>
       {code ? (
         <>
           <p className="recovery-code" aria-label={`복구 코드 ${code.split('').join(' ')}`}>{code}</p>

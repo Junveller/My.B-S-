@@ -13,6 +13,9 @@ export interface AppCtx {
   go: (s: ScreenKey) => void;
   toast: (msg: string) => void;
   tablet: boolean;
+  /** 할 일 · 시간표가 함께 보는 날짜 */
+  date: string;
+  setDate: (d: string) => void;
 }
 export const AppContext = createContext<AppCtx>(null as unknown as AppCtx);
 export const useApp = () => useContext(AppContext);
