@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { AppTitle, Field, Row, ScreenHeading, Sheet, Switch } from '../components/ui';
 import { saveSettings } from '../lib/data';
+import { askConfirm } from '../components/confirm';
 import { useApp } from '../lib/hooks';
 import {
   authErrorMessage, linkedEmail, linkEmail, regenerateRecoveryCode, setPin, signOut,
@@ -134,7 +135,7 @@ export function SettingsScreen({ embedded }: { embedded?: boolean }) {
   };
 
   const logout = async () => {
-    if (!confirm(remoteMode ? '로그아웃할까요? 다시 로그인하면 서버에서 데이터를 불러와요.' : '로그아웃할까요? 데이터는 이 기기에 남아 있어요.')) return;
+    if (!(await askConfirm(remoteMode ? '로그아웃할까요? 다시 로그인하면 서버에서 데이터를 불러와요.' : '로그아웃할까요? 데이터는 이 기기에 남아 있어요.', { okLabel: '로그아웃', danger: true }))) return;
     await signOut();
     setSession(undefined);
   };
@@ -230,7 +231,7 @@ function RecoveryCodeSheet({ open, onClose, code, onRegenerated }: {
 }) {
   const { toast } = useApp();
   const regen = async () => {
-    if (!confirm('새 복구 코드를 만들면 이전 코드는 더 이상 쓸 수 없어요. 계속할까요?')) return;
+    if (!(await askConfirm('새 복구 코드를 만들면 이전 코드는 더 이상 쓸 수 없어요. 계속할까요?', { okLabel: '새로 만들기' }))) return;
     try {
       onRegenerated(await regenerateRecoveryCode());
     } catch (e) {

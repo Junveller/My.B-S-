@@ -5,6 +5,21 @@ import {
   authErrorMessage, requestEmailReset, resetWithCode, setPin, signIn, signUp, type SessionInfo,
 } from '../lib/auth';
 import { isPin } from '../lib/crypto';
+
+/** public/icon.svg와 같은 그림 (파일 경로 없이도 보이도록 인라인) */
+function AppIcon() {
+  return (
+    <svg width={64} height={64} viewBox="0 0 512 512" aria-hidden="true" className="app-icon">
+      <rect width="512" height="512" fill="#4B55D6" />
+      <rect x="96" y="104" width="320" height="304" rx="44" fill="#FFFFFF" />
+      <rect x="136" y="150" width="140" height="40" rx="12" fill="#F2DC7A" />
+      <rect x="136" y="214" width="240" height="40" rx="12" fill="#9DD0EA" />
+      <rect x="216" y="278" width="160" height="40" rx="12" fill="#7ACB98" />
+      <rect x="136" y="342" width="90" height="24" rx="10" fill="#EEF0FF" />
+      <circle cx="352" cy="170" r="18" fill="#F5C84B" />
+    </svg>
+  );
+}
 import { remoteMode } from '../lib/supabase';
 
 type Mode = 'login' | 'signup' | 'reset';
@@ -61,7 +76,7 @@ export function AuthScreen({ onAuthed }: { onAuthed: (s: SessionInfo, isNew: boo
       <TitleBar name={nickname.trim() || '나'} />
       <div className="screen-body narrow">
         <div className="auth-hero">
-          <img src="/icon.svg" alt="" width={64} height={64} />
+          <AppIcon />
           <p className="muted">닉네임과 숫자 4자리로 시작해요</p>
         </div>
         {mode !== 'reset' && (

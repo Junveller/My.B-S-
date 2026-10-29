@@ -2,10 +2,16 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
-export default defineConfig({
+// `--mode artifact`: claude.ai 페이지로 열 수 있게 한 파일로 묶는 빌드 (서비스 워커 없음)
+export default defineConfig(({ mode }) => ({
+  base: mode === 'artifact' ? './' : '/',
+  build: mode === 'artifact'
+    ? { outDir: 'dist-artifact', assetsInlineLimit: 100_000_000, rollupOptions: { output: { inlineDynamicImports: true } } }
+    : undefined,
   plugins: [
     react(),
     VitePWA({
+      disable: mode === 'artifact',
       registerType: 'autoUpdate',
       includeAssets: ['icon.svg', 'apple-touch-icon.png'],
       manifest: {
@@ -38,4 +44,4 @@ export default defineConfig({
       },
     }),
   ],
-});
+}));

@@ -7,6 +7,7 @@ import { startSync, syncNow } from './lib/sync';
 import { supabase } from './lib/supabase';
 import { AppTitle } from './components/ui';
 import { Icon } from './components/Icon';
+import { ConfirmHost } from './components/confirm';
 import { AuthScreen, RecoveryNotice, SetPinScreen } from './screens/Auth';
 import { TodoScreen } from './screens/Todo';
 import { TimetableScreen } from './screens/Timetable';
@@ -122,6 +123,7 @@ function Shell({ session, setSession }: { session: SessionInfo; setSession: (s: 
           </nav>
         </div>
       )}
+      <ConfirmHost />
       <div className="toast-wrap" aria-live="polite">{toastMsg && <div className="toast">{toastMsg}</div>}</div>
     </AppContext.Provider>
   );

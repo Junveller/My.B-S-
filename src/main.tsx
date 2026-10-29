@@ -4,7 +4,8 @@ import { registerSW } from 'virtual:pwa-register';
 import App from './App';
 import './styles.css';
 
-registerSW({ immediate: true });
+if (import.meta.env.MODE === 'artifact') document.documentElement.classList.add('in-artifact');
+else registerSW({ immediate: true });
 
 if (navigator.storage?.persist) navigator.storage.persist().catch(() => undefined);
 

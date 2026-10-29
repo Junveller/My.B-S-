@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ColorPicker, Field, Row, Sheet, Switch } from '../components/ui';
 import { Icon } from '../components/Icon';
+import { askConfirm } from '../components/confirm';
 import { put, remove, uid } from '../lib/data';
 import { db } from '../lib/db';
 import { useBundles, useCategories, useToday } from '../lib/hooks';
@@ -71,7 +72,7 @@ export function BundleEdit({ open, bundle, onClose }: { open: boolean; bundle?: 
   const del = async () => {
     if (!bundle) return;
     const todos = await db.todos.where('bundleId').equals(bundle.id).toArray();
-    if (!confirm(`'${bundle.name}' 묶음과 할 일 ${todos.filter((t) => !t.deleted).length}개를 삭제할까요?\n시간표 기록은 남아요.`)) return;
+    if (!(await askConfirm(`'${bundle.name}' 묶음과 할 일 ${todos.filter((t) => !t.deleted).length}개를 삭제할까요? 시간표 기록은 남아요.`, { okLabel: '삭제', danger: true }))) return;
     for (const t of todos) await remove('todos', t.id);
     await remove('bundles', bundle.id);
     onClose();
@@ -174,7 +175,7 @@ export function CategoryEdit({ category, onClose }: { category: Category | null;
   };
   const del = async () => {
     const bs = (await db.bundles.where('categoryId').equals(c.id).toArray()).filter((b) => !b.deleted);
-    if (!confirm(`'${category.name}' 카테고리와 묶음 ${bs.length}개, 그 안의 할 일을 삭제할까요?\n시간표 기록은 남아요.`)) return;
+    if (!(await askConfirm(`'${category.name}' 카테고리와 묶음 ${bs.length}개, 그 안의 할 일을 삭제할까요? 시간표 기록은 남아요.`, { okLabel: '삭제', danger: true }))) return;
     for (const b of bs) {
       for (const t of await db.todos.where('bundleId').equals(b.id).toArray()) await remove('todos', t.id);
       await remove('bundles', b.id);
