@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { AppTitle, Empty, Field, IconButton, ScreenHeading, Sheet } from '../components/ui';
+import { AppTitle, Empty, Field, IconButton, ScreenHeading, Sheet, isEnter } from '../components/ui';
 import { Icon } from '../components/Icon';
 import { put, remove, saveSettings, uid } from '../lib/data';
 import { useApp, useExpenseCategories, useExpensesBetween, useLocalPref, usePaymentMethods } from '../lib/hooks';
@@ -240,7 +240,7 @@ function ExpenseSheet({ value, onClose, cats, methods }: {
           <input className="input" autoFocus value={newName} maxLength={20}
             placeholder={adding === 'cat' ? '새 지출 카테고리' : '새 결제수단 (예: 체크카드)'}
             aria-label={adding === 'cat' ? '새 지출 카테고리 이름' : '새 결제수단 이름'}
-            onChange={(ev) => setNewName(ev.target.value)} onKeyDown={(ev) => ev.key === 'Enter' && addOption()} />
+            onChange={(ev) => setNewName(ev.target.value)} onKeyDown={(ev) => isEnter(ev) && addOption()} />
           <button type="button" className="btn primary small" onClick={addOption}>추가</button>
         </div>
       )}

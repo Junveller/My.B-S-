@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { AppTitle, Field, Row, ScreenHeading, Sheet, Switch } from '../components/ui';
+import { AppTitle, Field, Row, ScreenHeading, Sheet, Switch, isEnter } from '../components/ui';
 import { saveSettings } from '../lib/data';
 import { askConfirm } from '../components/confirm';
 import { useApp } from '../lib/hooks';
@@ -58,14 +58,15 @@ function NameField() {
   const [name, setName] = useState(settings.displayName);
   useEffect(() => setName(settings.displayName), [settings.displayName]);
   const save = () => {
-    const n = name.trim();
+    const n = name.normalize('NFC').trim();
     if (!n) return setName(settings.displayName);
     if (n !== settings.displayName) saveSettings({ displayName: n }, session.nickname);
   };
   return (
     <Field label="닉네임" hint={`화면 맨 위에 “${name.trim() || settings.displayName}의 비서”로 보여요. 로그인 닉네임은 ${session.nickname}이에요.`}>
-      <input className="input" value={name} maxLength={20} onChange={(e) => setName(e.target.value)} onBlur={save}
-        onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()} />
+      <input className="input" lang="ko" value={name} maxLength={20} placeholder="예: 준혁" autoComplete="nickname"
+        autoCorrect="off" spellCheck={false} onChange={(e) => setName(e.target.value)} onBlur={save}
+        onKeyDown={(e) => isEnter(e) && (e.target as HTMLInputElement).blur()} />
     </Field>
   );
 }

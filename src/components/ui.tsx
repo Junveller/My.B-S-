@@ -4,6 +4,10 @@ import { useApp } from '../lib/hooks';
 import { COLOR_KEYS, COLORS } from '../lib/colors';
 import type { ColorKey } from '../lib/types';
 
+/** Enter 키 (한글 조합 중인 Enter는 무시: 마지막 글자가 아직 확정되지 않았다) */
+export const isEnter = (e: { key: string; nativeEvent: KeyboardEvent }) =>
+  e.key === 'Enter' && !e.nativeEvent.isComposing && e.nativeEvent.keyCode !== 229;
+
 export function TitleBar({ name }: { name: string }) {
   return (
     <header className="titlebar">

@@ -34,9 +34,15 @@ export async function currentSession(): Promise<SessionInfo | undefined> {
   return s;
 }
 
+/** 한글·영문·숫자 모두 허용. 맥(NFD)과 아이폰(NFC)에서 입력한 한글이 같은 닉네임이 되도록 NFC로 맞춘다 */
+export const normalizeNickname = (n: string) => n.normalize('NFC').trim().replace(/\s+/g, ' ');
+const nicknameKey = (n: string) => normalizeNickname(n).toLowerCase();
+
 export function validateNickname(n: string) {
-  const t = n.trim();
+  const t = normalizeNickname(n);
   if (t.length < 1 || t.length > 20) return '닉네임은 1~20자로 입력해 주세요';
+  // 보이지 않는 제어 문자만 막는다 (한글, 영문, 숫자, 기호는 모두 가능)
+  if (/[\u0000-\u001f\u007f\u200b-\u200f\u2028-\u202e\ufeff]/.test(t)) return '닉네임에 쓸 수 없는 문자가 있어요';
   return null;
 }
 
@@ -50,7 +56,7 @@ async function adoptRemote(session: RemoteSession, nickname: string, userId: str
 }
 
 export async function signUp(nickname: string, pin: string): Promise<SessionInfo> {
-  nickname = nickname.trim();
+  nickname = normalizeNickname(nickname);
   const bad = validateNickname(nickname);
   if (bad) throw new AuthError('nickname', { message: bad });
   if (!isPin(pin)) throw new AuthError('pin');
@@ -59,7 +65,7 @@ export async function signUp(nickname: string, pin: string): Promise<SessionInfo
     return adoptRemote(r.session, nickname, r.userId, r.recoveryCode);
   }
   const existing = await getMeta<LocalAccount>('account');
-  if (existing && existing.nickname.toLowerCase() === nickname.toLowerCase()) throw new AuthError('taken');
+  if (existing && nicknameKey(existing.nickname) === nicknameKey(nickname)) throw new AuthError('taken');
   if (existing) await clearLocalData();
   const salt = randomHex();
   const code = makeRecoveryCode();
@@ -76,7 +82,7 @@ export async function signUp(nickname: string, pin: string): Promise<SessionInfo
 /** 로컬 모드 잠금 처리 (서버 모드는 서버에서 강제) */
 async function localVerify(nickname: string, check: (acc: LocalAccount) => Promise<boolean>) {
   const acc = await getMeta<LocalAccount>('account');
-  if (!acc || acc.nickname.toLowerCase() !== nickname.trim().toLowerCase()) throw new AuthError('invalid', { remaining: MAX_TRIES });
+  if (!acc || nicknameKey(acc.nickname) !== nicknameKey(nickname)) throw new AuthError('invalid', { remaining: MAX_TRIES });
   if (acc.lockUntil > Date.now()) throw new AuthError('locked', { lockedUntil: acc.lockUntil });
   if (await check(acc)) {
     await setMeta('account', { ...acc, failed: 0, lockCount: 0, lockUntil: 0 });
@@ -93,7 +99,7 @@ async function localVerify(nickname: string, check: (acc: LocalAccount) => Promi
 }
 
 export async function signIn(nickname: string, pin: string): Promise<SessionInfo> {
-  nickname = nickname.trim();
+  nickname = normalizeNickname(nickname);
   if (remoteMode) {
     const r = await callAuth<{ session: RemoteSession; userId: string; nickname: string }>('login', { nickname, pin });
     return adoptRemote(r.session, r.nickname, r.userId);
@@ -107,7 +113,7 @@ export async function signIn(nickname: string, pin: string): Promise<SessionInfo
 /** 복구 코드로 PIN 재설정 → 새 복구 코드 발급 */
 export async function resetWithCode(nickname: string, code: string, newPin: string): Promise<SessionInfo> {
   if (!isPin(newPin)) throw new AuthError('pin');
-  nickname = nickname.trim();
+  nickname = normalizeNickname(nickname);
   if (remoteMode) {
     const r = await callAuth<{ session: RemoteSession; userId: string; nickname: string; recoveryCode: string }>(
       'reset_with_code', { nickname, code: normalizeCode(code), newPin },

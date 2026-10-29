@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { AppTitle, Checkbox, DateCard, Field, IconButton, Sheet } from '../components/ui';
+import { AppTitle, Checkbox, DateCard, Field, IconButton, Sheet, isEnter } from '../components/ui';
 import { Icon } from '../components/Icon';
 import { aggregateBundleIds, put, remove, uid } from '../lib/data';
 import { db } from '../lib/db';
@@ -134,7 +134,7 @@ function Top3Card({ date }: { date: string }) {
                 const { [i]: _, ...rest } = editing;
                 setEditing(rest);
               }}
-              onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()} />
+              onKeyDown={(e) => isEnter(e) && (e.target as HTMLInputElement).blur()} />
           </li>
         ))}
       </ol>
@@ -177,7 +177,7 @@ function BundleCard({ bundle, todos, onEdit, onSchedule, onEditTodo }: {
         <li className="todo add">
           <span className="todo-plus"><Icon name="plus" size={16} /></span>
           <input className="input bare" value={text} placeholder="할 일 추가" aria-label={`${bundle.name}에 할 일 추가`}
-            onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && add()} onBlur={add} />
+            onChange={(e) => setText(e.target.value)} onKeyDown={(e) => isEnter(e) && add()} onBlur={add} />
         </li>
       </ul>
     </div>

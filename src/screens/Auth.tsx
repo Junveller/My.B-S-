@@ -48,16 +48,19 @@ export function AuthScreen({ onAuthed }: { onAuthed: (s: SessionInfo, isNew: boo
     }
   };
 
-  const submit = (e: FormEvent) => {
+  const submit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (mode === 'login') run(async () => onAuthed(await signIn(nickname, pin), false));
+    // 한글 입력 중 Enter를 누르면 마지막 글자가 아직 state에 없을 수 있어 입력칸 값을 직접 읽는다
+    const typed = (e.currentTarget.elements.namedItem('nickname') as HTMLInputElement | null)?.value ?? nickname;
+    const nickname_ = typed;
+    if (mode === 'login') run(async () => onAuthed(await signIn(nickname_, pin), false));
     if (mode === 'signup') {
       if (pin !== pin2) return setErr('두 번 입력한 비밀번호가 달라요');
-      run(async () => onAuthed(await signUp(nickname, pin), true));
+      run(async () => onAuthed(await signUp(nickname_, pin), true));
     }
     if (mode === 'reset') {
       if (pin !== pin2) return setErr('두 번 입력한 비밀번호가 달라요');
-      run(async () => onAuthed(await resetWithCode(nickname, code, pin), true));
+      run(async () => onAuthed(await resetWithCode(nickname_, code, pin), true));
     }
   };
 
@@ -86,8 +89,9 @@ export function AuthScreen({ onAuthed }: { onAuthed: (s: SessionInfo, isNew: boo
         {mode === 'reset' && <h2 className="section-title">비밀번호 재설정</h2>}
 
         <form className="card list" onSubmit={submit}>
-          <Field label="닉네임" hint={mode === 'signup' ? '로그인 ID로 쓰여요. 다른 사람과 겹칠 수 없어요.' : undefined}>
-            <input className="input" value={nickname} maxLength={20} autoComplete="username" autoCapitalize="off"
+          <Field label="닉네임" hint={mode === 'signup' ? '한글, 영문, 숫자 모두 돼요 (1~20자). 로그인 ID로 쓰여서 다른 사람과 겹칠 수 없어요.' : undefined}>
+            <input className="input" name="nickname" lang="ko" value={nickname} maxLength={20} placeholder="예: 준혁"
+              autoComplete="nickname" autoCapitalize="none" autoCorrect="off" spellCheck={false} enterKeyHint="next"
               onChange={(e) => setNickname(e.target.value)} autoFocus />
           </Field>
           {mode === 'reset' && (

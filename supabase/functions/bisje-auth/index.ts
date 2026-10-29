@@ -44,7 +44,8 @@ function recoveryCode() {
 }
 const normCode = (s: string) => String(s ?? '').toUpperCase().replace(/[^0-9A-Z]/g, '');
 const isPin = (s: unknown) => typeof s === 'string' && /^\d{4}$/.test(s);
-const nickKey = (s: string) => s.trim().normalize('NFC').toLowerCase();
+const normNick = (s: string) => String(s ?? '').normalize('NFC').trim().replace(/\s+/g, ' ');
+const nickKey = (s: string) => normNick(s).toLowerCase();
 const lockMs = (n: number) => Math.min(10 * 60_000 * 2 ** n, 24 * 3600_000);
 
 interface Account {
@@ -108,7 +109,7 @@ Deno.serve(async (req) => {
   try {
     switch (body.action) {
       case 'signup': {
-        const nickname = String(body.nickname ?? '').trim().normalize('NFC');
+        const nickname = normNick(body.nickname);
         if (nickname.length < 1 || nickname.length > 20) return json(400, { error: 'nickname', message: '닉네임은 1~20자로 입력해 주세요' });
         if (!isPin(body.pin)) return json(400, { error: 'pin' });
         const { data: exists } = await admin.from('accounts').select('user_id').eq('nickname_key', nickKey(nickname)).maybeSingle();
