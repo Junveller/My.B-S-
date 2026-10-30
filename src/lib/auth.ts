@@ -3,7 +3,7 @@ import { clearLocalData } from './data';
 import { isPin, kdf, makeRecoveryCode, normalizeCode, randomHex } from './crypto';
 import { AuthError, remoteMode, rpc } from './supabase';
 import { flushSync, resetSyncState } from './sync';
-import { disableArtifactStore, getArtifactStore } from './artifactStore';
+import { artifactBuild, disableArtifactStore, getArtifactStore } from './artifactStore';
 
 export interface SessionInfo {
   nickname: string;
@@ -253,8 +253,10 @@ export function authErrorMessage(e: unknown): string {
       return `5번 틀려서 잠겼어요. ${mins}분 후에 다시 시도해 주세요.`;
     }
     case 'no_account':
+      if (storageMode() === 'claude') return '이 claude.ai 계정으로 가입한 기록이 없어요. ‘처음이에요’에서 가입해 주세요.';
+      if (artifactBuild) return 'claude.ai에 로그인되어 있지 않아서 계정을 불러올 수 없어요. 화면 맨 위 오른쪽의 ‘로그인’을 눌러 Claude 앱과 같은 계정으로 로그인한 뒤 다시 열어 주세요.';
       return storageMode() === 'claude'
-        ? '이 claude.ai 계정으로 가입한 기록이 없어요. ‘처음이에요’에서 가입해 주세요.'
+        ? ''
         : '이 브라우저에는 가입 기록이 없어요. 서버가 연결되지 않아 계정은 가입한 브라우저에만 있어요. 가입했던 브라우저에서 열거나, 여기서 새로 가입해 주세요.';
     case 'other_nickname':
       return storageMode() === 'claude'
