@@ -1,0 +1,239 @@
+import { useEffect, useState } from 'react';
+import { AppTitle, Field, Row, ScreenHeading, Sheet, Switch, isEnter } from '../components/ui';
+import { saveSettings } from '../lib/data';
+import { askConfirm } from '../components/confirm';
+import { useApp } from '../lib/hooks';
+import {
+  authErrorMessage, regenerateRecoveryCode, setPin, signOut, storageMode, syncedMode,
+} from '../lib/auth';
+import { getSyncStatus, onSyncStatus, syncNow, type SyncStatus } from '../lib/sync';
+import { artifactBuild } from '../lib/artifactStore';
+import { isPin } from '../lib/crypto';
+import type { ScreenKey, Sections } from '../lib/types';
+
+const SECTION_LABELS: [keyof Sections, string, string][] = [
+  ['top3', 'Top 3', '오늘 가장 중요한 3가지'],
+  ['summary', '집계시간 · Todo 진행', '시간표 위쪽 요약'],
+  ['stats', '통계 · 알바 수입', '모인 돈, 주·월 근무시간'],
+  ['ledger', '가계부', '지출, 예산, 결제수단'],
+  ['dailyReview', 'Daily Review', '하루 돌아보기 · 다음 버전 예정'],
+  ['dday', 'D-Day', '날짜 카운트다운 · 다음 버전 예정'],
+  ['goal', 'Goal', '목표 관리 · 다음 버전 예정'],
+];
+
+/** 표시할 섹션: 끄면 화면에서만 숨기고 데이터는 유지 */
+export function SectionsList() {
+  const { settings, session } = useApp();
+  const set = (k: keyof Sections, v: boolean) =>
+    saveSettings({ sections: { ...settings.sections, [k]: v } }, session.nickname);
+  return (
+    <div className="card list">
+      {SECTION_LABELS.map(([k, label, sub]) => (
+        <Row key={k} label={label} sub={sub}>
+          <Switch checked={settings.sections[k]} onChange={(v) => set(k, v)} label={`${label} 표시`} />
+        </Row>
+      ))}
+    </div>
+  );
+}
+
+/** 하루계획 열 때 (시작 화면) */
+function StartScreenChips() {
+  const { settings, session } = useApp();
+  return (
+    <div className="chips" role="radiogroup" aria-label="하루계획 열 때">
+      {START_OPTIONS.map((o) => (
+        <button key={o.value} type="button" role="radio" aria-checked={settings.startScreen === o.value}
+          className={'chip lg' + (settings.startScreen === o.value ? ' on' : '')}
+          onClick={() => saveSettings({ startScreen: o.value }, session.nickname)}>
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function NameField() {
+  const { settings, session } = useApp();
+  const [name, setName] = useState(settings.displayName);
+  useEffect(() => setName(settings.displayName), [settings.displayName]);
+  const save = () => {
+    const n = name.normalize('NFC').trim();
+    if (!n) return setName(settings.displayName);
+    if (n !== settings.displayName) saveSettings({ displayName: n }, session.nickname);
+  };
+  return (
+    <Field label="닉네임" hint={`화면 맨 위에 “${name.trim() || settings.displayName}의 비서”로 보여요. 로그인 닉네임은 ${session.nickname}이에요.`}>
+      <input className="input" lang="ko" value={name} maxLength={20} placeholder="예: 준혁" autoComplete="nickname"
+        autoCorrect="off" spellCheck={false} onChange={(e) => setName(e.target.value)} onBlur={save}
+        onKeyDown={(e) => isEnter(e) && (e.target as HTMLInputElement).blur()} />
+    </Field>
+  );
+}
+
+/** 아이패드 오른쪽 패널의 ‘가리기’ → 표시할 섹션 */
+export function SectionsScreen({ onDone }: { onDone: () => void }) {
+  return (
+    <div className="screen">
+      <div className="screen-body">
+        <div className="pane-head">
+          <h2 className="pane-title">설정</h2>
+          <button type="button" className="btn primary small" onClick={onDone}>완료</button>
+        </div>
+        <div>
+          <h3 className="block-title">표시할 섹션</h3>
+          <p className="muted small">끄면 화면에서만 숨겨지고, 기록은 그대로 남아요</p>
+        </div>
+        <SectionsList />
+        <h3 className="block-title">하루계획 열 때</h3>
+        <StartScreenChips />
+        <div className="card list"><NameField /></div>
+      </div>
+    </div>
+  );
+}
+
+const START_OPTIONS: { value: ScreenKey; label: string }[] = [
+  { value: 'timetable', label: '시간표' },
+  { value: 'todo', label: '할 일' },
+  { value: 'stats', label: '통계' },
+  { value: 'ledger', label: '가계부' },
+];
+
+const SYNC_LABEL: Record<SyncStatus, string> = {
+  local: '이 브라우저에만 저장 중 (서버 미설정)',
+  idle: '동기화됨',
+  syncing: '동기화 중…',
+  offline: '오프라인 · 연결되면 자동으로 동기화해요',
+  error: '동기화 실패 · 잠시 후 다시 시도해요',
+};
+
+export function SettingsScreen({ embedded }: { embedded?: boolean }) {
+  const { session, setSession } = useApp();
+  const [sync, setSync] = useState(getSyncStatus());
+  const [pinOpen, setPinOpen] = useState(false);
+  const [codeOpen, setCodeOpen] = useState(false);
+  const standalone = matchMedia('(display-mode: standalone)').matches || (navigator as { standalone?: boolean }).standalone;
+
+  useEffect(() => {
+    const off = onSyncStatus(setSync);
+    return () => { off(); };
+  }, []);
+  const logout = async () => {
+    const msg = {
+      server: '로그아웃할까요? 다시 로그인하면 서버에서 데이터를 불러와요.',
+      claude: '로그아웃할까요? 데이터는 claude.ai 계정에 남아 있고, 다시 로그인하면 불러와요.',
+      local: '로그아웃할까요? 데이터는 이 브라우저에 남아 있어요.',
+    }[storageMode()];
+    if (!(await askConfirm(msg, { okLabel: '로그아웃', danger: true }))) return;
+    await signOut();
+    setSession(undefined);
+  };
+
+  return (
+    <div className="screen">
+      {!embedded && <AppTitle />}
+      <div className="screen-body">
+        {!embedded && <ScreenHeading>설정</ScreenHeading>}
+
+        <div>
+          <h3 className="block-title">표시할 섹션</h3>
+          <p className="muted small">끄면 화면에서만 숨겨지고, 기록은 그대로 남아요</p>
+        </div>
+        <SectionsList />
+
+        <h3 className="block-title">하루계획 열 때</h3>
+        <StartScreenChips />
+
+        <h3 className="block-title">계정</h3>
+        <div className="card list">
+          <NameField />
+          <Row label="비밀번호 (숫자 4자리) 변경"><button type="button" className="btn soft small" onClick={() => setPinOpen(true)}>변경</button></Row>
+          <Row label="복구 코드 확인" sub="비밀번호를 잊었을 때 필요해요">
+            <button type="button" className="btn soft small" onClick={() => setCodeOpen(true)}>보기</button>
+          </Row>
+        </div>
+
+        <h3 className="section-title">저장 · 동기화</h3>
+        <div className="card list">
+          <Row label="상태" sub={storageMode() === 'claude' && sync !== 'error' && sync !== 'offline'
+            ? `${SYNC_LABEL[sync]} · claude.ai 계정에 저장` : SYNC_LABEL[sync]}>
+            {syncedMode() && <button type="button" className="btn soft small" onClick={() => syncNow()}>지금 동기화</button>}
+          </Row>
+          {!standalone && !artifactBuild && (
+            <Row label="홈 화면에 추가하기"
+              sub="Safari 공유 버튼 → ‘홈 화면에 추가’. 오래 안 쓰면 Safari가 사이트 데이터를 지울 수 있어서 홈 화면 추가를 권장해요." />
+          )}
+        </div>
+
+        <button type="button" className="btn outline danger wide" onClick={logout}>로그아웃</button>
+        <p className="muted small center">Bisje · 변경 사항은 자동으로 저장돼요</p>
+      </div>
+
+      <PinSheet open={pinOpen} onClose={() => setPinOpen(false)} />
+      <RecoveryCodeSheet open={codeOpen} onClose={() => setCodeOpen(false)} code={session.recoveryCode}
+        onRegenerated={(recoveryCode) => setSession({ ...session, recoveryCode })} />
+    </div>
+  );
+}
+
+function PinSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { toast } = useApp();
+  const [a, setA] = useState('');
+  const [b, setB] = useState('');
+  useEffect(() => { setA(''); setB(''); }, [open]);
+  const ok = isPin(a) && a === b;
+  const save = async () => {
+    try {
+      await setPin(a);
+      toast('비밀번호를 바꿨어요');
+      onClose();
+    } catch (e) {
+      toast(authErrorMessage(e));
+    }
+  };
+  return (
+    <Sheet open={open} onClose={onClose} title="비밀번호 변경"
+      footer={<button type="button" className="btn primary big grow" disabled={!ok} onClick={save}>저장</button>}>
+      <Field label="새 비밀번호 (숫자 4자리)"><PinInput value={a} onChange={setA} autoFocus /></Field>
+      <Field label="한 번 더"><PinInput value={b} onChange={setB} /></Field>
+      {b.length === 4 && a !== b && <p className="error">두 번 입력한 비밀번호가 달라요</p>}
+    </Sheet>
+  );
+}
+
+function RecoveryCodeSheet({ open, onClose, code, onRegenerated }: {
+  open: boolean; onClose: () => void; code?: string; onRegenerated: (c: string) => void;
+}) {
+  const { toast } = useApp();
+  const regen = async () => {
+    if (!(await askConfirm('새 복구 코드를 만들면 이전 코드는 더 이상 쓸 수 없어요. 계속할까요?', { okLabel: '새로 만들기' }))) return;
+    try {
+      onRegenerated(await regenerateRecoveryCode());
+    } catch (e) {
+      toast(authErrorMessage(e));
+    }
+  };
+  return (
+    <Sheet open={open} onClose={onClose} title="복구 코드"
+      footer={<button type="button" className="btn primary big grow" onClick={onClose}>닫기</button>}>
+      {code ? (
+        <>
+          <p className="recovery-code" aria-label={`복구 코드 ${code.split('').join(' ')}`}>{code}</p>
+          <p className="muted small">캡처하거나 적어서 안전한 곳에 보관하세요. 비밀번호를 잊었을 때 이 코드로 재설정해요.</p>
+        </>
+      ) : (
+        <p className="muted">이 기기에는 복구 코드가 저장되어 있지 않아요. 가입할 때 받은 코드를 쓰거나, 새로 만들 수 있어요.</p>
+      )}
+      <button type="button" className="btn soft wide" onClick={regen}>새 복구 코드 만들기</button>
+    </Sheet>
+  );
+}
+
+export function PinInput({ value, onChange, autoFocus, id }: { value: string; onChange: (v: string) => void; autoFocus?: boolean; id?: string }) {
+  return (
+    <input id={id} className="input pin" type="password" inputMode="numeric" pattern="[0-9]*" autoComplete="off" maxLength={4}
+      autoFocus={autoFocus} value={value} placeholder="••••"
+      onChange={(e) => onChange(e.target.value.replace(/\D/g, '').slice(0, 4))} />
+  );
+}
