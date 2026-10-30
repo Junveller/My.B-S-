@@ -1,7 +1,0 @@
-node_modules
-dist
-dev-dist
-*.tsbuildinfo
-.env
-.env.local
-dist-artifact
